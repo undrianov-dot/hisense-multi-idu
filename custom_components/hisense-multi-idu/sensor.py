@@ -1,83 +1,44 @@
 import logging
-import json
-import aiohttp
-from datetime import timedelta
 
-from homeassistant.components.sensor import SensorEntity
-from homeassistant.const import ENERGY_KILO_WATT_HOUR
-from homeassistant.helpers.entity import Entity
-from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
-from homeassistant.helpers.typing import HomeAssistantType
+from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, SensorStateClass
+from homeassistant.const import UnitOfEnergy
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-SCAN_INTERVAL = timedelta(seconds=30)
+class HisenseEnergySensor(CoordinatorEntity, SensorEntity):
+    """Датчик для учета электроэнергии (электросчётчик Hisense)."""
 
-
-async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    """Deprecated setup; not used with config entry."""
-    return
-
-
-async def async_setup_entry(hass, config_entry, async_add_entities):
-    """Set up the Hisense meter sensor from config entry."""
-    host = hass.data[DOMAIN].get("host")
-    if not host:
-        _LOGGER.error("Hisense meter: missing 'host' in configuration")
-        return
-
-    async def async_update_data():
-        payload = {"ids": ["1", "2"], "ip": host}
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"http://{host}/cgi/get_meter_pwr.shtml",
-                    json=payload,
-                    timeout=5
-                ) as response:
-                    if response.status != 200:
-                        raise ValueError(f"Bad response status: {response.status}")
-                    text = await response.text()
-                    data = json.loads(text)
-                    return data
-        except Exception as err:
-            _LOGGER.warning("Error fetching Hisense meter data: %s", err)
-            return None
-
-    coordinator = DataUpdateCoordinator(
-        hass,
-        _LOGGER,
-        name="Hisense Meter Sensor",
-        update_method=async_update_data,
-        update_interval=SCAN_INTERVAL,
-    )
-
-    await coordinator.async_config_entry_first_refresh()
-
-    async_add_entities([HisenseMeterSensor(coordinator)], True)
-
-
-class HisenseMeterSensor(CoordinatorEntity, SensorEntity):
-    """Representation of Hisense power meter."""
-
-    _attr_name = "Hisense электросчётчик"
-    _attr_unique_id = "hisense_meter_energy"
-    _attr_device_class = "energy"
-    _attr_state_class = "total_increasing"
-    _attr_native_unit_of_measurement = ENERGY_KILO_WATT_HOUR
-
-    def __init__(self, coordinator: DataUpdateCoordinator):
+    def __init__(self, coordinator, client):
+        """Инициализация датчика энергопотребления."""
         super().__init__(coordinator)
-        self._state = None
+        self._client = client
+        self._attr_name = "Hisense электросчётчик"
+        self._attr_unique_id = "hisense_meter_energy"
+        self._attr_device_class = SensorDeviceClass.ENERGY
+        self._attr_state_class = SensorStateClass.TOTAL_INCREASING
+        self._attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
 
     @property
     def native_value(self):
-        try:
-            dats = self.coordinator.data.get("dats")
-            if dats and len(dats) > 0 and "pwr" in dats[0]:
-                return round(float(dats[0]["pwr"]) / 1000, 2)
-        except Exception as e:
-            _LOGGER.debug("Parsing error: %s", e)
-        return None
+        """Текущее значение энергии (кВт·ч)."""
+        return self.coordinator.data
+
+    @property
+    def device_info(self):
+        """Информация об устройстве контроллера (для Device Registry)."""
+        return {
+            "identifiers": {(DOMAIN, self._client.host)},
+            "name": f"Hisense Multi-IDU Controller {self._client.host}",
+            "manufacturer": "Hisense",
+            "model": "Hisense Multi-IDU Controller"
+        }
+
+async def async_setup_entry(hass, entry, async_add_entities):
+    """Настройка датчика энергии при добавлении интеграции."""
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator_energy"]
+    client = hass.data[DOMAIN][entry.entry_id]["client"]
+    sensor = HisenseEnergySensor(coordinator, client)
+    async_add_entities([sensor])
