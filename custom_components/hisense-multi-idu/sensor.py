@@ -22,7 +22,8 @@ class HisensePowerMeter(CoordinatorEntity, SensorEntity):
             "identifiers": {(DOMAIN, ip)},
             "name": f"Hisense Multi-IDU ({ip})",
             "manufacturer": "Hisense",
-            "model": "Multi-IDU AC"
+            "model": "Multi-IDU",
+            "configuration_url": f"http://{ip}"
         }
 
     @property
@@ -33,12 +34,13 @@ class HisensePowerMeter(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self):
         """Return the current power consumption value."""
-        # The coordinator data holds the latest power value
         return self.coordinator.data
 
 async def async_setup_entry(hass, entry, async_add_entities):
     """Set up the Hisense power meter sensor from config entry."""
-    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator_sensor"]
-    ip = entry.data.get("host")
+    data = hass.data[DOMAIN][entry.entry_id]
+    coordinator = data["coordinator_sensor"]
+    ip = data["host"]
+    
     sensor = HisensePowerMeter(coordinator, ip)
     async_add_entities([sensor], update_before_add=False)
