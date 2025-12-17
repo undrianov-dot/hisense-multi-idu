@@ -1,288 +1,158 @@
-# custom_components/hisense_multi_idu/climate.py
-from __future__ import annotations
-
-import json
 import logging
-from dataclasses import dataclass
-from typing import Any
 
 from homeassistant.components.climate import ClimateEntity
 from homeassistant.components.climate.const import ClimateEntityFeature, HVACMode
-from homeassistant.const import ATTR_TEMPERATURE
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.restore_state import RestoreEntity
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import TEMP_CELSIUS
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 
+# Карта HVAC режимов Home Assistant -> коды режимов устройства
+MODE_HVAC_MAP = {
+    HVACMode.AUTO: 0,
+    HVACMode.COOL: 1,
+    HVACMode.DRY: 2,
+    HVACMode.FAN_ONLY: 3,
+    HVACMode.HEAT: 4
+}
+# Обратная карта: код режима устройства -> HVACMode Home Assistant
+HVAC_MAP_INV = {v: k for k, v in MODE_HVAC_MAP.items()}
+
+# Карта режимов вентилятора
+FAN_MODE_MAP = {
+    "Auto": 0,
+    "Low": 1,
+    "Medium": 2,
+    "High": 3
+}
+# Обратная карта для получения названия по коду
+FAN_MODE_MAP_INV = {v: k for k, v in FAN_MODE_MAP.items()}
+
 _LOGGER = logging.getLogger(__name__)
 
+class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
+    """Класс климатического устройства для внутреннего блока Hisense (IDU)."""
 
-# --- Маппинги (если у тебя в панели другие коды — поправь здесь) ---
-MODE_MAP: dict[str, int] = {
-    "cool": 2,
-    "dry": 4,
-    "fan_only": 8,
-    "heat": 1,
-}
-MODE_REVERSE_MAP: dict[int, str] = {v: k for k, v in MODE_MAP.items()}
-
-FAN_MAP: dict[str, int] = {
-    "high": 2,
-    "medium": 4,
-    "low": 8,
-}
-FAN_REVERSE_MAP: dict[int, str] = {v: k for k, v in FAN_MAP.items()}
-
-
-@dataclass(frozen=True)
-class HiDomUnitKey:
-    sys: int
-    addr: int
-
-
-class HisenseMultiIduCoordinator(DataUpdateCoordinator[dict[HiDomUnitKey, list[int]]]):
-    def __init__(self, hass: HomeAssistant, host: str, scan_interval: float):
-        self.hass = hass
-        self.host = host
-        self.session = async_get_clientsession(hass)
-
-        super().__init__(
-            hass=hass,
-            logger=_LOGGER,
-            name="Hisense Multi-IDU",
-            update_interval=None,  # interval зададим через async_request_refresh + throttling внутри HA
-        )
-
-        # В DataUpdateCoordinator в HA interval обычно задают через timedelta,
-        # но чтобы не тянуть datetime — используем built-in periodic через hass.helpers.event.
-        # Проще: будем опираться на coordinator.async_request_refresh() из HA,
-        # а частоту зададим в __init__.py (рекомендовано).
-        self._scan_interval = scan_interval
-
-    async def _async_update_data(self) -> dict[HiDomUnitKey, list[int]]:
-        url = f"http://{self.host}/cgi/get_idu_data.shtml"
-
-        # сразу все 16
-        devs = [{"sys": s, "addr": a} for s in (1, 2) for a in range(1, 9)]
-        payload = {"devs": devs, "ip": self.host}
-
-        try:
-            async with self.session.post(url, json=payload, timeout=6) as resp:
-                if resp.status != 200:
-                    raise UpdateFailed(f"HTTP {resp.status} on get_idu_data")
-
-                # Контроллер часто отвечает без Content-Type → отключаем проверку
-                try:
-                    result = await resp.json(content_type=None)
-                except Exception:
-                    text = await resp.text()
-                    try:
-                        result = json.loads(text)
-                    except Exception as e:
-                        raise UpdateFailed(f"Response is not JSON. First 200 chars: {text[:200]!r}") from e
-
-            dats = result.get("dats") or []
-            out: dict[HiDomUnitKey, list[int]] = {}
-
-            # ожидаем, что порядок dats соответствует order devs
-            for i, item in enumerate(dats):
-                data = item.get("data")
-                if not isinstance(data, list):
-                    continue
-                if i >= len(devs):
-                    break
-                key = HiDomUnitKey(sys=devs[i]["sys"], addr=devs[i]["addr"])
-                out[key] = data
-
-            if not out:
-                raise UpdateFailed("Empty dats/data from controller")
-
-            return out
-
-        except Exception as e:
-            raise UpdateFailed(str(e)) from e
-
-
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
-    """Set up Hisense Multi-IDU climates from a config entry."""
-    host = entry.data.get("host") or entry.options.get("host")
-    if not host:
-        # именно это убирает твою ошибку:
-        # "ConfigEntryError in forwarded platform climate; Instead raise ConfigEntryError before calling async_forward_entry_setups"
-        # → тут мы просто не продолжаем сетап, а логируем понятную причину.
-        _LOGGER.error("hisense_multi_idu: missing 'host' in config entry")
-        return
-
-    scan_interval = float(entry.options.get("scan_interval", entry.data.get("scan_interval", 10)))
-
-    coordinator = HisenseMultiIduCoordinator(hass, host=host, scan_interval=scan_interval)
-
-    # первый опрос перед созданием сущностей
-    await coordinator.async_config_entry_first_refresh()
-
-    entities: list[HisenseAC] = []
-    for sys in (1, 2):
-        for addr in range(1, 9):
-            name = f"IDU S{sys}-{addr}"
-            unique_id = f"idu_s{sys}_{addr}"
-            entities.append(HisenseAC(coordinator, unique_id, name, sys, addr))
-
-    async_add_entities(entities)
-
-
-class HisenseAC(ClimateEntity, RestoreEntity):
-    """Hisense indoor unit controlled via HiDom HTTP API."""
-
-    _attr_temperature_unit = "°C"
-    _attr_min_temp = 16
-    _attr_max_temp = 30
-    _attr_target_temperature_step = 1.0
-
-    _attr_supported_features = (
-        ClimateEntityFeature.TARGET_TEMPERATURE
-        | ClimateEntityFeature.FAN_MODE
-        | ClimateEntityFeature.TURN_ON
-        | ClimateEntityFeature.TURN_OFF
-    )
-
-    _attr_hvac_modes = [HVACMode.COOL, HVACMode.DRY, HVACMode.FAN_ONLY, HVACMode.HEAT, HVACMode.OFF]
-    _attr_fan_modes = ["high", "medium", "low"]
-
-    def __init__(self, coordinator: HisenseMultiIduCoordinator, unique_id: str, name: str, sys: int, addr: int):
-        self.coordinator = coordinator
-        self._attr_unique_id = unique_id
-        self._attr_name = name
-        self._sys = sys
-        self._addr = addr
-
-        self._attr_hvac_mode = HVACMode.OFF
-        self._attr_target_temperature = 25
-        self._attr_fan_mode = "medium"
+    def __init__(self, coordinator, client, idu_id: str):
+        """Инициализация климатической сущности IDU."""
+        super().__init__(coordinator)
+        self._client = client
+        self._id = idu_id
+        # Формирование дружественного имени, например "IDU S1 1-2"
+        parts = idu_id.split('_')
+        if parts[0].startswith('s'):
+            system_num = parts[0][1:]
+        else:
+            system_num = parts[0]
+        self._attr_name = f"IDU S{system_num} {parts[1]}-{parts[2]}"
+        # Уникальный ID для сущности климата (соответствует идентификатору IDU)
+        self._attr_unique_id = idu_id
+        # Поддерживаемые возможности: установка температуры и скорость вентилятора
+        self._attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.FAN_MODE
+        # Поддерживаемые режимы HVAC (включая выключение)
+        self._attr_hvac_modes = [HVACMode.OFF, HVACMode.AUTO, HVACMode.COOL, HVACMode.DRY, HVACMode.FAN_ONLY, HVACMode.HEAT]
+        # Единица температуры – градусы Цельсия
+        self._attr_temperature_unit = TEMP_CELSIUS
+        # Возможные режимы вентилятора
+        self._attr_fan_modes = list(FAN_MODE_MAP.keys())
 
     @property
-    def available(self) -> bool:
-        return self.coordinator.last_update_success
+    def current_temperature(self):
+        """Текущая температура воздуха, сообщаемая внутренним блоком."""
+        data = self.coordinator.data.get(self._id, {}) or {}
+        # Попытаемся получить значение по одному из возможных ключей
+        return data.get("current_temperature") or data.get("current_temp") or data.get("room_temp") or data.get("temp_current")
 
-    async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
-        state = await self.async_get_last_state()
-        if state:
-            # не трогаем HVAC из restore — реальный статус приходит по опросу
-            t = state.attributes.get("temperature")
-            if t is not None:
-                try:
-                    self._attr_target_temperature = float(t)
-                except Exception:
-                    pass
-            fm = state.attributes.get("fan_mode")
-            if fm in self._attr_fan_modes:
-                self._attr_fan_mode = fm
+    @property
+    def target_temperature(self):
+        """Установленная (целевая) температура кондиционера."""
+        data = self.coordinator.data.get(self._id, {}) or {}
+        return data.get("set_temperature") or data.get("set_temp") or data.get("target_temp")
 
-    def _hvac_to_model(self) -> int:
-        if self._attr_hvac_mode == HVACMode.COOL:
-            return MODE_MAP["cool"]
-        if self._attr_hvac_mode == HVACMode.DRY:
-            return MODE_MAP["dry"]
-        if self._attr_hvac_mode == HVACMode.FAN_ONLY:
-            return MODE_MAP["fan_only"]
-        if self._attr_hvac_mode == HVACMode.HEAT:
-            return MODE_MAP["heat"]
-        return MODE_MAP["cool"]  # OFF → оставляем cool как "дефолт"
+    @property
+    def hvac_mode(self):
+        """Текущий режим работы HVAC (охлаждение, обогрев, и т.д., либо Off)."""
+        data = self.coordinator.data.get(self._id, {}) or {}
+        power = data.get("power")
+        # Если питание выключено (power=0 или "off"), возвращаем OFF
+        if power == 0 or (isinstance(power, str) and power.lower() == "off"):
+            return HVACMode.OFF
+        mode_code = data.get("mode")
+        return HVAC_MAP_INV.get(mode_code, HVACMode.OFF)
 
-    async def _send_command(self) -> None:
-        status = 0 if self._attr_hvac_mode == HVACMode.OFF else 1
-        model = self._hvac_to_model()
-        wind = FAN_MAP.get(self._attr_fan_mode, FAN_MAP["medium"])
-        temp = int(round(float(self._attr_target_temperature)))
+    @property
+    def fan_mode(self):
+        """Текущая скорость вентилятора."""
+        data = self.coordinator.data.get(self._id, {}) or {}
+        fan_code = data.get("fan_speed") or data.get("fan") or data.get("fan_mode")
+        return FAN_MODE_MAP_INV.get(fan_code)
 
-        cmd_list = [
-            {"seq": 1, "sys": self._sys, "iduAddr": self._addr, "regAddr": 72, "regVal": [2, 0, 0, 0, 0, 0]},
-            {"seq": 2, "sys": self._sys, "iduAddr": self._addr, "regAddr": 78, "regVal": [status, model, wind, temp, 0]},
-            {"seq": 3, "sys": self._sys, "iduAddr": self._addr, "regAddr": 72, "regVal": [2, 0, 0, 0, 0, 0]},
-        ]
+    @property
+    def min_temp(self):
+        """Минимально допустимая температура установки (например, 16°C)."""
+        return 16
 
-        body = json.dumps({"ip": "127.0.0.1", "cmdList": cmd_list})
-        url = f"http://{self.coordinator.host}/cgi/set_idu.shtml"
+    @property
+    def max_temp(self):
+        """Максимально допустимая температура установки (например, 30°C)."""
+        return 30
 
-        try:
-            async with self.coordinator.session.post(
-                url,
-                data=body,
-                headers={"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"},
-                timeout=6,
-            ) as resp:
-                if resp.status != 200:
-                    _LOGGER.error("Hisense set failed: %s %s", resp.status, await resp.text())
-        except Exception as e:
-            _LOGGER.exception("Hisense set exception: %s", e)
+    @property
+    def device_info(self):
+        """Информация о устройстве (для Device Registry)."""
+        return {
+            "identifiers": {(DOMAIN, self._id)},
+            "name": self.name,
+            "manufacturer": "Hisense",
+            "model": "Hisense Multi-IDU Indoor Unit",
+            "via_device": (DOMAIN, self._client.host)
+        }
 
-    async def async_set_temperature(self, **kwargs: Any) -> None:
-        temp = kwargs.get(ATTR_TEMPERATURE)
+    async def async_set_hvac_mode(self, hvac_mode: str):
+        """Установить новый режим работы (или выключить устройство)."""
+        if hvac_mode == HVACMode.OFF:
+            # Выключаем питание
+            await self._client.set_idu(self._id, power=0)
+        else:
+            # Включаем питание и устанавливаем требуемый режим
+            mode_code = MODE_HVAC_MAP.get(hvac_mode)
+            await self._client.set_idu(self._id, power=1, mode=mode_code)
+        # После команды сразу запрашиваем обновление данных
+        await self.coordinator.async_request_refresh()
+
+    async def async_set_temperature(self, **kwargs):
+        """Установить новую целевую температуру."""
+        temp = kwargs.get("temperature")
         if temp is None:
             return
-        self._attr_target_temperature = float(temp)
-        await self._send_command()
+        await self._client.set_idu(self._id, set_temp=temp)
         await self.coordinator.async_request_refresh()
-        self.async_write_ha_state()
 
-    async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
-        self._attr_hvac_mode = hvac_mode
-        await self._send_command()
-        await self.coordinator.async_request_refresh()
-        self.async_write_ha_state()
-
-    async def async_set_fan_mode(self, fan_mode: str) -> None:
-        self._attr_fan_mode = fan_mode
-        await self._send_command()
-        await self.coordinator.async_request_refresh()
-        self.async_write_ha_state()
-
-    async def async_turn_on(self) -> None:
-        if self._attr_hvac_mode == HVACMode.OFF:
-            self._attr_hvac_mode = HVACMode.COOL
-        await self._send_command()
-        await self.coordinator.async_request_refresh()
-        self.async_write_ha_state()
-
-    async def async_turn_off(self) -> None:
-        self._attr_hvac_mode = HVACMode.OFF
-        await self._send_command()
-        await self.coordinator.async_request_refresh()
-        self.async_write_ha_state()
-
-    async def async_update(self) -> None:
-        # Обновления берём из coordinator (1 запрос на все 16)
-        key = HiDomUnitKey(sys=self._sys, addr=self._addr)
-        data = (self.coordinator.data or {}).get(key)
-
-        if not data or len(data) < 32:
+    async def async_set_fan_mode(self, fan_mode: str):
+        """Установить новую скорость вентилятора."""
+        if fan_mode not in FAN_MODE_MAP:
+            _LOGGER.error("Unsupported fan mode: %s", fan_mode)
             return
+        fan_code = FAN_MODE_MAP[fan_mode]
+        await self._client.set_idu(self._id, fan_speed=fan_code)
+        await self.coordinator.async_request_refresh()
 
-        try:
-            status = int(data[28])
-            model = int(data[29])
-            wind = int(data[30])
-            temp = int(data[31])
+    async def async_turn_off(self):
+        """Выключить кондиционер (питание off)."""
+        await self._client.set_idu(self._id, power=0)
+        await self.coordinator.async_request_refresh()
 
-            self._attr_target_temperature = temp
-            self._attr_fan_mode = FAN_REVERSE_MAP.get(wind, "medium")
+    async def async_turn_on(self):
+        """Включить кондиционер (питание on, режим прежний)."""
+        await self._client.set_idu(self._id, power=1)
+        await self.coordinator.async_request_refresh()
 
-            if status == 0:
-                self._attr_hvac_mode = HVACMode.OFF
-            else:
-                mode_str = MODE_REVERSE_MAP.get(model, "cool")
-                self._attr_hvac_mode = {
-                    "cool": HVACMode.COOL,
-                    "dry": HVACMode.DRY,
-                    "fan_only": HVACMode.FAN_ONLY,
-                    "heat": HVACMode.HEAT,
-                }.get(mode_str, HVACMode.COOL)
-
-        except Exception:
-            # не валим сущность из-за кривого массива
-            _LOGGER.debug("Bad data array for sys=%s addr=%s: %r", self._sys, self._addr, data)
-            return
+async def async_setup_entry(hass, entry, async_add_entities):
+    """Настройка всех климат-сущностей (IDU) на основе полученных данных."""
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator_climate"]
+    client = hass.data[DOMAIN][entry.entry_id]["client"]
+    entities = []
+    # Создаем сущности для всех IDU, имеющихся в данных
+    for idu_id in coordinator.data.keys():
+        entities.append(HisenseIDUClimate(coordinator, client, idu_id))
+    async_add_entities(entities)
