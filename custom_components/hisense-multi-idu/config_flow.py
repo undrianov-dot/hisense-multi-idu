@@ -1,45 +1,16 @@
-"""Config flow for Hisense Multi-IDU integration."""
-import aiohttp
-import asyncio
-import voluptuous as vol
-
 from homeassistant import config_entries
-from homeassistant.core import HomeAssistant
-from homeassistant.data_entry_flow import FlowResult
-
-from homeassistant.helpers import aiohttp_client
-
+import voluptuous as vol
 from .const import DOMAIN
 
-class HisenseMultiIDUConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for Hisense Multi-IDU integration."""
+class HisenseConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
-    async def async_step_user(self, user_input=None) -> FlowResult:
-        """Handle the initial step where the user inputs the Hisense device IP."""
+    async def async_step_user(self, user_input=None):
         errors = {}
         if user_input is not None:
-            host = user_input.get("host", "").strip()
-            # Check if already configured
-            await self.async_set_unique_id(host)
-            self._abort_if_unique_id_configured()
-            # Try connecting to the device
-            try:
-                session = aiohttp_client.async_get_clientsession(self.hass)
-                async with session.get(f"http://{host}/cgi/get_meter_pwr.shtml", timeout=5) as resp:
-                    if resp.status != 200:
-                        errors["base"] = "cannot_connect"
-            except asyncio.TimeoutError:
-                errors["base"] = "cannot_connect"
-            except aiohttp.ClientError:
-                errors["base"] = "cannot_connect"
-            except Exception:
-                errors["base"] = "unknown"
-            if not errors:
-                # Everything is okay, create the entry
-                return self.async_create_entry(title=host, data={"host": host})
-        # Show the input form with errors if any
-        data_schema = vol.Schema({
+            return self.async_create_entry(title=f"Hisense Multi-IDU ({user_input['host']})", data=user_input)
+
+        schema = vol.Schema({
             vol.Required("host"): str
         })
-        return self.async_show_form(step_id="user", data_schema=data_schema, errors=errors)
+        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
