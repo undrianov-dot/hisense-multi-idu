@@ -1,9 +1,7 @@
 {
-  "name": "Hisense Multi-IDU Climate",
-  "content_in_root": false,
-  "domain": "hisense_multi_idu",
-  "homeassistant": "2023.0.0",
+  "name": "Hisense Multi-IDU",
+  "domains": ["hisense_multi_idu"],
   "country": "RU",
-  "zip_release": false,
+  "homeassistant": "2023.0.0",
   "render_readme": true
 }
