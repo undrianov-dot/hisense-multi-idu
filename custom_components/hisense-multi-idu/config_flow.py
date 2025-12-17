@@ -1,47 +1,45 @@
+"""Config flow for Hisense Multi-IDU integration."""
+import aiohttp
 import asyncio
-import logging
 import voluptuous as vol
 
 from homeassistant import config_entries
-from homeassistant.const import CONF_HOST
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import FlowResult
+
 from homeassistant.helpers import aiohttp_client
 
 from .const import DOMAIN
 
-_LOGGER = logging.getLogger(__name__)
-
 class HisenseMultiIDUConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Config Flow для интеграции Hisense Multi-IDU (настройка через UI)."""
-
+    """Handle a config flow for Hisense Multi-IDU integration."""
     VERSION = 1
 
-    async def async_step_user(self, user_input=None):
-        """Обработка шага конфигурации, запрашивающего IP контроллера."""
+    async def async_step_user(self, user_input=None) -> FlowResult:
+        """Handle the initial step where the user inputs the Hisense device IP."""
         errors = {}
         if user_input is not None:
-            # Проверяем, не настроена ли уже интеграция с этим же хостом
-            await self.async_set_unique_id(user_input[CONF_HOST])
+            host = user_input.get("host", "").strip()
+            # Check if already configured
+            await self.async_set_unique_id(host)
             self._abort_if_unique_id_configured()
-
-            session = aiohttp_client.async_get_clientsession(self.hass)
+            # Try connecting to the device
             try:
-                # Пробуем получить данные с контроллера для проверки доступности
-                from . import HisenseClient
-                client = HisenseClient(user_input[CONF_HOST], session)
-                await client.get_idu_data()
-            except Exception as err:
-                _LOGGER.error("Error connecting to Hisense controller %s: %s", user_input[CONF_HOST], err)
+                session = aiohttp_client.async_get_clientsession(self.hass)
+                async with session.get(f"http://{host}/cgi/get_meter_pwr.shtml", timeout=5) as resp:
+                    if resp.status != 200:
+                        errors["base"] = "cannot_connect"
+            except asyncio.TimeoutError:
                 errors["base"] = "cannot_connect"
-            else:
-                # Подключение успешно – создаем запись конфигурации
-                return self.async_create_entry(
-                    title=f"Hisense Multi-IDU ({user_input[CONF_HOST]})",
-                    data=user_input
-                )
-
-        # Форма ввода IP-адреса
+            except aiohttp.ClientError:
+                errors["base"] = "cannot_connect"
+            except Exception:
+                errors["base"] = "unknown"
+            if not errors:
+                # Everything is okay, create the entry
+                return self.async_create_entry(title=host, data={"host": host})
+        # Show the input form with errors if any
         data_schema = vol.Schema({
-            vol.Required(CONF_HOST, default=user_input.get(CONF_HOST) if user_input else ""): str
+            vol.Required("host"): str
         })
         return self.async_show_form(step_id="user", data_schema=data_schema, errors=errors)
