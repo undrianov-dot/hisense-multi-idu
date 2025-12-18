@@ -12,7 +12,19 @@ class HisensePowerMeter(CoordinatorEntity, SensorEntity):
     """Representation of the Hisense power meter sensor."""
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_native_unit_of_measurement = UnitOfPower.WATT
+    _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
+_attr_suggested_display_precision = 3  # 3 знака после запятой
+
+@property
+def native_value(self):
+    data = self.coordinator.data
+    if data is None:
+        return "Недоступно"
+    try:
+        # Конвертируем ватты в киловатты
+        return round(float(data) / 1000, 3)
+    except (ValueError, TypeError):
+        return data
     # Добавляем предложение для единицы измерения (опционально)
     _attr_suggested_unit_of_measurement = UnitOfPower.KILO_WATT
 
@@ -93,3 +105,4 @@ async def async_setup_entry(hass, entry, async_add_entities):
     
     sensor = HisensePowerMeter(coordinator, ip)
     async_add_entities([sensor], update_before_add=False)
+
