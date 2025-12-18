@@ -45,9 +45,8 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
     _attr_fan_modes = HA_FAN_MODES
     _attr_min_temp = 16
     _attr_max_temp = 30
-    _attr_target_temperature_step = 1.0
     
-    def __init__(self, coordinator, client, uid, device_info):
+    def __init__(self, coordinator, client, uid, device_info, entity_name=None):
         super().__init__(coordinator)
         self._client = client
         self._uid = uid
@@ -62,7 +61,12 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
             self._sys = 1
             self._addr = 1
         
-        self._attr_name = device_info.get("name", f"IDU {uid}")
+        # Если передано имя объекта, используем его, иначе берем из device_info
+        if entity_name:
+            self._attr_name = entity_name
+        else:
+            self._attr_name = device_info.get("name", f"IDU {uid}")
+            
         self._attr_unique_id = f"{DOMAIN}_{uid}"
         self._attr_device_info = device_info
         
@@ -282,35 +286,45 @@ async def async_setup_entry(hass, entry, async_add_entities):
     
     entities = []
     
-    # Базовая информация об устройстве
+    # ФИКСИРОВАННОЕ ИМЯ УСТРОЙСТВА (Device) - это изменит название устройства в HA
+    hub_device_name = f"Hisense Multi-IDU Hub ({host})"
+    
+    # Базовая информация об устройстве (Device)
     base_device_info = {
         "identifiers": {(DOMAIN, host)},
-        "name": f"Hisense Multi-IDU ({host})",
+        "name": hub_device_name,  # ФИКСИРОВАННОЕ имя устройства
         "manufacturer": "Hisense",
-        "model": "Multi-IDU",
+        "model": "Multi-IDU Hub",
         "configuration_url": f"http://{host}"
     }
     
-    # Создаем сущности для каждого кондиционера (включая хаб)
+    # Создаем сущности для каждого кондиционера
     if isinstance(coordinator.data, dict):
         for uid, unit_data in coordinator.data.items():
             if unit_data:
+                # Получаем оригинальное имя объекта (Entity) из данных устройства
+                original_name = unit_data.get("name", f"IDU {uid}")
+                
                 # Создаем информацию об устройстве для этого блока
+                # НЕ МЕНЯЕМ поле "name" в device_info - оно должно остаться как у хаба
                 entity_device_info = base_device_info.copy()
+                
+                # Добавляем дополнительную информацию, НЕ ТРОГАЯ "name"
+                suggested_area = unit_data.get("pppname") or unit_data.get("ppname") or unit_data.get("pname")
+                if suggested_area:
+                    entity_device_info["suggested_area"] = suggested_area
+                
                 entity_device_info.update({
-                    "name": unit_data.get("name", f"IDU {uid}"),
-                    "model": unit_data.get("indoor_name", "Indoor Unit"),
-                    "suggested_area": unit_data.get("pppname"),
                     "via_device": (DOMAIN, host),
                 })
                 
+                # Создаем объект с оригинальным именем (Entity), но с device_info хаба
                 entities.append(HisenseIDUClimate(
-                    coordinator, client, uid, entity_device_info
+                    coordinator, client, uid, entity_device_info, entity_name=original_name
                 ))
     
     if entities:
         async_add_entities(entities, update_before_add=True)
-        _LOGGER.info("Created %s climate entities", len(entities))
+        _LOGGER.info("Created %s climate entities. Hub name: %s", len(entities), hub_device_name)
     else:
         _LOGGER.warning("No climate entities created. Check device connection.")
-
