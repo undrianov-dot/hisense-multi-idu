@@ -26,10 +26,12 @@ class HisenseMultiIDUConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             # Пробуем подключиться к устройству
             try:
                 session = aiohttp_client.async_get_clientsession(self.hass)
-                # Проверяем доступность endpoint электросчетчика
-                async with session.get(f"http://{host}/cgi/get_meter_pwr.shtml", timeout=5) as resp:
+                # Проверяем доступность основного интерфейса
+                async with session.get(f"http://{host}/", timeout=5) as resp:
                     if resp.status != 200:
-                        errors["base"] = "cannot_connect"
+                        # Пробуем другой endpoint
+                        async with session.get(f"http://{host}/cgi/get_miscdata.shtml", timeout=5):
+                            pass
             except (asyncio.TimeoutError, aiohttp.ClientError):
                 errors["base"] = "cannot_connect"
             except Exception:
