@@ -22,8 +22,7 @@ class HisensePowerMeter(CoordinatorEntity, SensorEntity):
             "identifiers": {(DOMAIN, ip)},
             "name": f"Hisense Multi-IDU ({ip})",
             "manufacturer": "Hisense",
-            "model": "Multi-IDU",
-            "configuration_url": f"http://{ip}"
+            "model": "Multi-IDU AC"
         }
 
     @property
@@ -34,32 +33,12 @@ class HisensePowerMeter(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self):
         """Return the current power consumption value."""
-        data = self.coordinator.data
-        
-        # Если данные недоступны
-        if data is None:
-            return "Недоступно"
-        
-        # Если число, возвращаем как float
-        try:
-            return float(data)
-        except (ValueError, TypeError):
-            # Если не число, возвращаем как есть
-            return data
-
-    @property
-    def extra_state_attributes(self):
-        """Return additional attributes."""
-        return {
-            "data_source": "Hisense Multi-IDU Power Meter",
-            "status": "online" if self.coordinator.data is not None else "offline"
-        }
+        # The coordinator data holds the latest power value
+        return self.coordinator.data
 
 async def async_setup_entry(hass, entry, async_add_entities):
     """Set up the Hisense power meter sensor from config entry."""
-    data = hass.data[DOMAIN][entry.entry_id]
-    coordinator = data["coordinator_sensor"]
-    ip = data["host"]
-    
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator_sensor"]
+    ip = entry.data.get("host")
     sensor = HisensePowerMeter(coordinator, ip)
     async_add_entities([sensor], update_before_add=False)
