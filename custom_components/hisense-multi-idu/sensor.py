@@ -18,11 +18,12 @@ class HisensePowerMeter(CoordinatorEntity, SensorEntity):
         self._attr_unique_id = f"{DOMAIN}_power_{ip_slug}"
         self._attr_name = "Электросчётчик"
         self._hub_info = hub_info
+        self._ip = ip
         
         # Device info to link with hub device
         self._attr_device_info = {
             "identifiers": {(DOMAIN, ip)},
-            "name": hub_info.get("name", f"Hisense Multi-IDU ({ip})"),
+            "name": hub_info.get("name", f"Hisense Multi-IDU Hub ({ip})"),
             "manufacturer": "Hisense",
             "model": hub_info.get("model", "Multi-IDU Gateway"),
             "configuration_url": f"http://{ip}"
@@ -35,7 +36,7 @@ class HisensePowerMeter(CoordinatorEntity, SensorEntity):
             return False
         
         data = self.coordinator.data
-        # Доступен если данные есть (даже если это строка "Недоступно")
+        # Доступен, если данные есть (даже если None - это означает "недоступен")
         return data is not None
 
     @property
@@ -43,15 +44,33 @@ class HisensePowerMeter(CoordinatorEntity, SensorEntity):
         """Return the current power consumption value."""
         data = self.coordinator.data
         
-        # Если данные - строка "Недоступно", возвращаем как есть
-        if isinstance(data, str):
-            return data
+        # Если None - счетчик недоступен
+        if data is None:
+            return "Недоступно"
         
         # Если число, возвращаем как float
-        if data is not None:
+        try:
             return float(data)
+        except (ValueError, TypeError):
+            # Если не число, возвращаем как есть (строка)
+            return data
+
+    @property
+    def extra_state_attributes(self):
+        """Return additional attributes."""
+        attrs = {
+            "hub_name": self._hub_info.get("name"),
+            "hub_model": self._hub_info.get("model"),
+            "ip_address": self._ip
+        }
         
-        return None
+        data = self.coordinator.data
+        if data is None:
+            attrs["status"] = "offline"
+        else:
+            attrs["status"] = "online"
+            
+        return attrs
 
 async def async_setup_entry(hass, entry, async_add_entities):
     """Set up the Hisense power meter sensor from config entry."""
@@ -62,3 +81,4 @@ async def async_setup_entry(hass, entry, async_add_entities):
     
     sensor = HisensePowerMeter(coordinator, ip, hub_info)
     async_add_entities([sensor], update_before_add=False)
+    _LOGGER.info("Power meter sensor created for hub: %s", hub_info.get("name"))
