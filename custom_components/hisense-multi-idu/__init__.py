@@ -18,21 +18,30 @@ async def get_power_data(self):
                 _LOGGER.warning("Request failed with status: %s", resp.status)
                 return None
             
-            # Получаем текст ответа
-            raw_text = await resp.text()
-            _LOGGER.debug("Raw response: %s", raw_text)
+            # ВАЖНО: читаем сырые байты, а не используем resp.text() или resp.json()
+            raw_bytes = await resp.read()
+            _LOGGER.debug("Raw response bytes (first 100): %s", raw_bytes[:100])
             
-            # Декодируем ASCII коды, если нужно
-            text = raw_text
-            if raw_text and all(c.isdigit() or c.isspace() for c in raw_text.strip()):
+            # Конвертируем байты в строку (ASCII)
+            try:
+                text = raw_bytes.decode('ascii')
+            except UnicodeDecodeError:
+                _LOGGER.error("Failed to decode response as ASCII")
+                return None
+            
+            _LOGGER.debug("Decoded text: %s", text)
+            
+            # Декодируем ASCII коды, если текст состоит из чисел
+            if text and all(c.isdigit() or c.isspace() for c in text.strip()):
                 try:
-                    # Декодируем ASCII коды
-                    ascii_codes = [int(x) for x in raw_text.split()]
+                    # Разделяем по пробелам и конвертируем в числа
+                    ascii_codes = [int(x) for x in text.split()]
                     decoded_text = ''.join(chr(code) for code in ascii_codes)
                     _LOGGER.debug("Decoded ASCII to text: %s", decoded_text)
                     text = decoded_text
                 except Exception as decode_error:
                     _LOGGER.warning("Failed to decode ASCII: %s", decode_error)
+                    return None
             
             # Пробуем распарсить JSON
             try:
