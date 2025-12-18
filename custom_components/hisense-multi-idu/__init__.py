@@ -26,6 +26,7 @@ class HisenseClient:
         self._session = session
         self._miscdata_cache = None
         self._miscdata_timestamp = 0
+        self._hub_info = None  # Кэш информации о хабе
     
     async def get_miscdata(self):
         """Получает топологию устройств с кэшированием."""
@@ -59,15 +60,129 @@ class HisenseClient:
             _LOGGER.error("Failed to get miscdata: %s", e)
             raise UpdateFailed(f"Failed to get miscdata: {e}")
     
-    async def get_idu_data(self):
-        """Получает данные всех внутренних блоков."""
+    async def get_hub_info(self):
+        """Получает информацию о хабе (главном устройстве)."""
+        if self._hub_info is not None:
+            return self._hub_info
+            
         try:
+            miscdata = await self.get_miscdata()
+            topo = miscdata.get("topo", [])
+            
+            # Ищем устройство, которое выглядит как хаб
+            # Обычно это устройство с адресом 100-1-1 или содержащее "hidom", "gateway"
+            hub_candidates = []
+            
+            for item in topo:
+                dev_type = item.get("type", "").lower()
+                dev_name = item.get("name", "").lower()
+                dev_code = item.get("code", "").lower()
+                
+                # Критерии для определения хаба:
+                # 1. Содержит "hidom" в любом поле
+                # 2. Содержит "gateway" в любом поле
+                # 3. Имеет адрес 100-1-1
+                # 4. Имеет тип, отличный от IDU
+                
+                sys_adr = item.get("sysAdr", 0)
+                address = item.get("address", 0)
+                
+                is_hub = (
+                    "hidom" in dev_name or "hidom" in dev_code or "hidom" in dev_type or
+                    "gateway" in dev_name or "gateway" in dev_code or "gateway" in dev_type or
+                    (sys_adr == 100 and address == 1) or
+                    dev_type not in ["idu", "cassette", "duct", "compact", "fullsize"]
+                )
+                
+                if is_hub:
+                    hub_candidates.append(item)
+            
+            if hub_candidates:
+                # Берем первый подходящий кандидат
+                hub = hub_candidates[0]
+                self._hub_info = {
+                    "name": hub.get("name", f"Hisense Hub {self._host}"),
+                    "type": hub.get("type", "hidom"),
+                    "code": hub.get("code", ""),
+                    "sys": hub.get("sysAdr", 100),
+                    "addr": hub.get("address", 1),
+                    "model": hub.get("indoorName", "Multi-IDU Gateway"),
+                    "unique_id": f"S{hub.get('sysAdr', 100)}_{hub.get('address', 1)}"
+                }
+                _LOGGER.info("Found hub device: %s", self._hub_info)
+            else:
+                # Если не нашли, создаем дефолтный хаб
+                self._hub_info = {
+                    "name": f"Hisense Multi-IDU ({self._host})",
+                    "type": "hidom",
+                    "code": "",
+                    "sys": 100,
+                    "addr": 1,
+                    "model": "Multi-IDU Gateway",
+                    "unique_id": f"S100_1"
+                }
+                _LOGGER.warning("No hub device found, using default")
+            
+            return self._hub_info
+            
+        except Exception as e:
+            _LOGGER.error("Failed to get hub info: %s", e)
+            # Возвращаем дефолтный хаб при ошибке
+            return {
+                "name": f"Hisense Multi-IDU ({self._host})",
+                "type": "hidom",
+                "code": "",
+                "sys": 100,
+                "addr": 1,
+                "model": "Multi-IDU Gateway",
+                "unique_id": f"S100_1"
+            }
+    
+    async def get_idu_data(self):
+        """Получает данные всех внутренних блоков (исключая хаб)."""
+        try:
+            # Получаем информацию о хабе
+            hub_info = await self.get_hub_info()
+            hub_unique_id = hub_info.get("unique_id", "S100_1")
+            
             # Получаем топологию
             miscdata = await self.get_miscdata()
             topo = miscdata.get("topo", [])
             
-            # Фильтруем только IDU (внутренние блоки)
-            idu_list = [item for item in topo if item.get("type") == "IDU"]
+            # Логируем все устройства для отладки
+            _LOGGER.debug("=== Topology Devices ===")
+            for idx, item in enumerate(topo):
+                dev_type = item.get("type", "")
+                dev_name = item.get("name", "")
+                sys_adr = item.get("sysAdr", 0)
+                address = item.get("address", 0)
+                unique_id = f"S{sys_adr}_{address}"
+                _LOGGER.debug(
+                    "[%d] type=%s, name=%s, sys=%s, addr=%s, uid=%s", 
+                    idx, dev_type, dev_name, sys_adr, address, unique_id
+                )
+            
+            # Фильтруем только IDU (внутренние блоки), исключая хаб
+            idu_list = []
+            for item in topo:
+                sys_adr = item.get("sysAdr", 0)
+                address = item.get("address", 0)
+                unique_id = f"S{sys_adr}_{address}"
+                
+                # Пропускаем хаб
+                if unique_id == hub_unique_id:
+                    _LOGGER.debug("Skipping hub device: %s", item.get("name"))
+                    continue
+                
+                # Включаем только внутренние блоки
+                dev_type = item.get("type", "").lower()
+                if dev_type in ["idu", "cassette", "duct", "compact", "fullsize", "one way", "two way"]:
+                    idu_list.append(item)
+                else:
+                    _LOGGER.debug("Skipping non-IDU device type '%s': %s", 
+                                 dev_type, item.get("name"))
+            
+            _LOGGER.info("Found %s IDU devices (excluding hub)", len(idu_list))
             
             if not idu_list:
                 _LOGGER.warning("No IDU devices found in topology")
@@ -173,21 +288,27 @@ class HisenseClient:
         try:
             async with self._session.get(url, timeout=10) as resp:
                 if resp.status != 200:
-                    raise UpdateFailed(f"HTTP error: {resp.status}")
+                    _LOGGER.warning("Power meter endpoint returned status %s", resp.status)
+                    return None  # Возвращаем None если endpoint недоступен
                 
                 text = await resp.text()
+                _LOGGER.debug("Power meter response: %s", text)
+                
                 # Пытаемся извлечь числовое значение
                 import re
+                # Ищем число (целое или с плавающей точкой)
                 match = re.search(r"([0-9]+(?:\.[0-9]+)?)", text)
                 if match:
-                    return float(match.group(1))
+                    value = float(match.group(1))
+                    _LOGGER.debug("Parsed power value: %s", value)
+                    return value
                 else:
                     _LOGGER.warning("Could not parse power value from: %s", text)
-                    return 0.0
+                    return None  # Возвращаем None если не распарсилось
                     
         except Exception as e:
             _LOGGER.error("Failed to get power data: %s", e)
-            raise UpdateFailed(f"Failed to get power data: {e}")
+            return None
     
     async def set_idu(self, sys: int, addr: int, **kwargs):
         """Устанавливает параметры внутреннего блока."""
@@ -244,6 +365,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     session = aiohttp_client.async_get_clientsession(hass)
     client = HisenseClient(host, session)
     
+    # Получаем информацию о хабе
+    hub_info = await client.get_hub_info()
+    _LOGGER.info("Hub info: %s", hub_info)
+    
     # Координатор для климатических устройств
     async def update_climate_data():
         data = await client.get_idu_data()
@@ -262,6 +387,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Координатор для датчика мощности
     async def update_sensor_data():
         data = await client.get_power_data()
+        if data is None:
+            # Если данные недоступны, возвращаем строку вместо числа
+            return "Недоступно"
         return data
     
     coordinator_sensor = DataUpdateCoordinator(
@@ -289,7 +417,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "client": client,
         "coordinator_climate": coordinator_climate,
         "coordinator_sensor": coordinator_sensor,
-        "host": host
+        "host": host,
+        "hub_info": hub_info  # Сохраняем информацию о хабе
     }
     
     # Настраиваем платформы
