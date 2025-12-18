@@ -46,7 +46,8 @@ class HisenseMultiIDUConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         
         # Показываем форму ввода
         data_schema = vol.Schema({
-            vol.Required("host", default="10.99.3.100"): str
+            vol.Required("host", default="10.99.3.100"): str, 
+            vol.Optional("hub_name", default="Hisense Multi-IDU Hub"): str,
         })
         return self.async_show_form(
             step_id="user",
