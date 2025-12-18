@@ -17,12 +17,14 @@ class HisensePowerMeter(CoordinatorEntity, SensorEntity):
         ip_slug = ip.replace('.', '_')
         self._attr_unique_id = f"{ip_slug}_power_meter"
         self._attr_name = "Электросчётчик"
-        # Device info to link with climate devices
+        
+        # Device info ДОЛЖНО СОВПАДАТЬ с climate.py
         self._attr_device_info = {
             "identifiers": {(DOMAIN, ip)},
-            "name": f"Hisense Multi-IDU ({ip})",
+            "name": f"Hisense Multi-IDU Hub ({ip})",  # ТАКОЕ ЖЕ имя как в climate.py
             "manufacturer": "Hisense",
-            "model": "Multi-IDU AC"
+            "model": "Multi-IDU Hub",
+            "configuration_url": f"http://{ip}"
         }
 
     @property
@@ -33,12 +35,32 @@ class HisensePowerMeter(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self):
         """Return the current power consumption value."""
-        # The coordinator data holds the latest power value
-        return self.coordinator.data
+        data = self.coordinator.data
+        
+        # Если данные недоступны
+        if data is None:
+            return "Недоступно"
+        
+        # Если число, возвращаем как float
+        try:
+            return float(data)
+        except (ValueError, TypeError):
+            # Если не число, возвращаем как есть
+            return data
+
+    @property
+    def extra_state_attributes(self):
+        """Return additional attributes."""
+        return {
+            "data_source": "Hisense Multi-IDU Power Meter",
+            "status": "online" if self.coordinator.data is not None else "offline"
+        }
 
 async def async_setup_entry(hass, entry, async_add_entities):
     """Set up the Hisense power meter sensor from config entry."""
-    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator_sensor"]
-    ip = entry.data.get("host")
+    data = hass.data[DOMAIN][entry.entry_id]
+    coordinator = data["coordinator_sensor"]
+    ip = data["host"]
+    
     sensor = HisensePowerMeter(coordinator, ip)
     async_add_entities([sensor], update_before_add=False)
