@@ -12,23 +12,23 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# Маппинг режимов устройства на HVACMode
+# Маппинг режимов устройства на HVACMode (БЕЗ AUTO)
 DEVICE_TO_HVAC = {
-    "auto": HVACMode.AUTO,
     "cool": HVACMode.COOL,
     "heat": HVACMode.HEAT,
     "dry": HVACMode.DRY,
     "fan_only": HVACMode.FAN_ONLY,
+    # Дополнительные режимы, которые могут прийти из устройства
     "auto_dry": HVACMode.DRY,
-    "refresh": HVACMode.AUTO,
-    "sleep": HVACMode.AUTO,
+    "refresh": HVACMode.COOL,  # Перенаправляем в COOL
+    "sleep": HVACMode.COOL,    # Перенаправляем в COOL
     "heat_sup": HVACMode.HEAT
 }
 
 HVAC_TO_DEVICE = {v: k for k, v in DEVICE_TO_HVAC.items()}
 
-# Доступные скорости вентилятора в Home Assistant
-HA_FAN_MODES = ["auto", "high", "medium", "low", "s_high", "s_low", "breeze"]
+# Доступные скорости вентилятора в Home Assistant (ТОЛЬКО ОСНОВНЫЕ)
+HA_FAN_MODES = ["auto", "low", "medium", "high"]
 
 class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
     """Representation of a Hisense indoor unit."""
@@ -40,7 +40,8 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         ClimateEntityFeature.TURN_OFF |
         ClimateEntityFeature.TURN_ON
     )
-    _attr_hvac_modes = [HVACMode.OFF, HVACMode.COOL, HVACMode.HEAT, HVACMode.DRY, HVACMode.FAN_ONLY, HVACMode.AUTO]
+    # УБРАЛИ HVACMode.AUTO
+    _attr_hvac_modes = [HVACMode.OFF, HVACMode.COOL, HVACMode.HEAT, HVACMode.DRY, HVACMode.FAN_ONLY]
     _attr_fan_modes = HA_FAN_MODES
     _attr_min_temp = 16
     _attr_max_temp = 30
@@ -114,12 +115,26 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
             return HVACMode.OFF
         
         mode = self._current_data.get("mode", "cool")
+        # Если режим "auto" пришел от устройства, преобразуем в "cool"
+        if mode == "auto":
+            mode = "cool"
         return DEVICE_TO_HVAC.get(mode, HVACMode.COOL)
     
     @property
     def fan_mode(self):
         self._update_data()
-        return self._current_data.get("fan", "medium")
+        fan = self._current_data.get("fan", "auto")
+        # Если пришла нестандартная скорость, преобразуем в ближайшую стандартную
+        if fan not in HA_FAN_MODES:
+            if "low" in fan or "s_low" in fan:
+                return "low"
+            elif "medium" in fan or "mid" in fan:
+                return "medium"
+            elif "high" in fan or "s_high" in fan:
+                return "high"
+            else:
+                return "auto"
+        return fan
     
     @property
     def extra_state_attributes(self):
@@ -135,7 +150,9 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
                 "indoor_name": self._current_data.get("indoor_name", ""),
                 "tenant_name": self._current_data.get("tenant_name", ""),
                 "pipe_temperature": self._current_data.get("pipe_temp"),
-                "is_locked": self._current_data.get("model1", 0) == 1
+                "is_locked": self._current_data.get("model1", 0) == 1,
+                "original_fan": self._current_data.get("fan", ""),  # Оригинальное значение вентилятора
+                "original_mode": self._current_data.get("mode", "")  # Оригинальное значение режима
             })
         
         return attrs
@@ -209,7 +226,7 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         if not self._current_data:
             return
         
-        # Преобразуем строку в код устройства
+        # Преобразуем строку в код устройства (только основные скорости)
         fan_code = FAN_REVERSE_MAP.get(fan_mode, 4)
         
         # Получаем текущие параметры
@@ -275,10 +292,11 @@ async def async_setup_entry(hass, entry, async_add_entities):
     
     entities = []
     
-    # Информация об устройстве для хаба (будет общая для всех сущностей)
+    # Информация об устройстве для хаба
+    hub_name = hub_info.get("name", f"Hisense Multi-IDU ({host})")
     hub_device_info = {
         "identifiers": {(DOMAIN, host)},
-        "name": hub_info.get("name", f"Hisense Multi-IDU ({host})"),
+        "name": hub_name,  # Используем имя из hub_info
         "manufacturer": "Hisense",
         "model": hub_info.get("model", "Multi-IDU Gateway"),
         "configuration_url": f"http://{host}"
@@ -290,9 +308,26 @@ async def async_setup_entry(hass, entry, async_add_entities):
             if unit_data:
                 # Создаем информацию об устройстве для этого блока
                 entity_device_info = hub_device_info.copy()
+                
+                # Используем более понятные имена для блоков
+                indoor_name = unit_data.get("indoor_name", "")
+                dev_name = unit_data.get("name", f"IDU {uid}")
+                
+                # Пытаемся сделать имя более читаемым
+                if "one way" in dev_name.lower():
+                    clean_name = dev_name.replace("one way cassette", "Кассетный").strip()
+                elif "two way" in dev_name.lower():
+                    clean_name = dev_name.replace("two way cassette", "Двусторонний кассетный").strip()
+                elif "compact" in dev_name.lower():
+                    clean_name = dev_name.replace("compact cassette", "Компактный кассетный").strip()
+                elif "duct" in dev_name.lower():
+                    clean_name = dev_name.replace("duct", "Канальный").strip()
+                else:
+                    clean_name = dev_name
+                
                 entity_device_info.update({
-                    "name": unit_data.get("name", f"IDU {uid}"),
-                    "model": unit_data.get("indoor_name", "Indoor Unit"),
+                    "name": clean_name,
+                    "model": indoor_name if indoor_name else "Indoor Unit",
                     "suggested_area": unit_data.get("pppname") or unit_data.get("ppname") or unit_data.get("pname"),
                     "via_device": (DOMAIN, host),
                 })
@@ -300,10 +335,10 @@ async def async_setup_entry(hass, entry, async_add_entities):
                 entities.append(HisenseIDUClimate(
                     coordinator, client, uid, entity_device_info
                 ))
-                _LOGGER.debug("Created climate entity for UID: %s", uid)
+                _LOGGER.debug("Created climate entity: %s", clean_name)
     
     if entities:
         async_add_entities(entities, update_before_add=True)
-        _LOGGER.info("Created %s climate entities", len(entities))
+        _LOGGER.info("Created %s climate entities (hub: %s)", len(entities), hub_name)
     else:
         _LOGGER.warning("No climate entities created. Check device connection.")
