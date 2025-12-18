@@ -45,6 +45,7 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
     _attr_fan_modes = HA_FAN_MODES
     _attr_min_temp = 16
     _attr_max_temp = 30
+    _attr_target_temperature_step = 1.0
     
     def __init__(self, coordinator, client, uid, device_info):
         super().__init__(coordinator)
@@ -312,3 +313,4 @@ async def async_setup_entry(hass, entry, async_add_entities):
         _LOGGER.info("Created %s climate entities", len(entities))
     else:
         _LOGGER.warning("No climate entities created. Check device connection.")
+
