@@ -26,7 +26,6 @@ class HisenseClient:
         self._session = session
         self._miscdata_cache = None
         self._miscdata_timestamp = 0
-        self._hub_info = None
     
     async def get_miscdata(self):
         """Получает топологию устройств с кэшированием."""
@@ -60,125 +59,15 @@ class HisenseClient:
             _LOGGER.error("Failed to get miscdata: %s", e)
             raise UpdateFailed(f"Failed to get miscdata: {e}")
     
-    async def get_hub_info(self):
-        """Получает информацию о хабе (главном устройстве)."""
-        if self._hub_info is not None:
-            return self._hub_info
-            
-        try:
-            miscdata = await self.get_miscdata()
-            topo = miscdata.get("topo", [])
-            
-            # Логируем все устройства для анализа
-            _LOGGER.debug("=== All devices in topology ===")
-            for idx, item in enumerate(topo):
-                _LOGGER.debug("[%d] %s", idx, item)
-            
-            # Ищем устройство, которое является хабом
-            # По вашему скриншоту, это "one way cassette-100-1-1"
-            hub_device = None
-            
-            for item in topo:
-                name = item.get("name", "")
-                # Ищем по имени из скриншота
-                if "cassette-100" in name or "hidom" in name.lower():
-                    hub_device = item
-                    break
-            
-            if hub_device:
-                # Формируем читаемое имя для хаба
-                hub_name = "Hisense Multi-IDU Hub"
-                if hub_device.get("name"):
-                    # Пытаемся очистить имя
-                    raw_name = hub_device.get("name")
-                    if "one way cassette-100-1-1" in raw_name:
-                        hub_name = "Hisense Multi-IDU Gateway"
-                    else:
-                        hub_name = raw_name.replace("-100-1-1", "").title()
-                
-                self._hub_info = {
-                    "name": hub_name,
-                    "type": hub_device.get("type", "hidom"),
-                    "code": hub_device.get("code", ""),
-                    "sys": hub_device.get("sysAdr", 100),
-                    "addr": hub_device.get("address", 1),
-                    "model": hub_device.get("indoorName", "Multi-IDU Gateway"),
-                    "unique_id": f"S{hub_device.get('sysAdr', 100)}_{hub_device.get('address', 1)}",
-                    "raw_name": hub_device.get("name", "")
-                }
-                _LOGGER.info("Found hub device: %s", self._hub_info["name"])
-            else:
-                # Если не нашли, используем первое устройство или создаем дефолтное
-                if topo:
-                    first_device = topo[0]
-                    self._hub_info = {
-                        "name": "Hisense Multi-IDU Hub",
-                        "type": first_device.get("type", "hidom"),
-                        "code": first_device.get("code", ""),
-                        "sys": first_device.get("sysAdr", 100),
-                        "addr": first_device.get("address", 1),
-                        "model": first_device.get("indoorName", "Multi-IDU Gateway"),
-                        "unique_id": f"S{first_device.get('sysAdr', 100)}_{first_device.get('address', 1)}",
-                        "raw_name": first_device.get("name", "")
-                    }
-                else:
-                    self._hub_info = {
-                        "name": f"Hisense Multi-IDU Hub ({self._host})",
-                        "type": "hidom",
-                        "code": "",
-                        "sys": 100,
-                        "addr": 1,
-                        "model": "Multi-IDU Gateway",
-                        "unique_id": f"S100_1",
-                        "raw_name": ""
-                    }
-                _LOGGER.warning("No specific hub device found, using: %s", self._hub_info["name"])
-            
-            return self._hub_info
-            
-        except Exception as e:
-            _LOGGER.error("Failed to get hub info: %s", e)
-            # Возвращаем дефолтный хаб
-            return {
-                "name": f"Hisense Multi-IDU Hub ({self._host})",
-                "type": "hidom",
-                "code": "",
-                "sys": 100,
-                "addr": 1,
-                "model": "Multi-IDU Gateway",
-                "unique_id": f"S100_1",
-                "raw_name": ""
-            }
-    
     async def get_idu_data(self):
-        """Получает данные всех внутренних блоков (исключая хаб)."""
+        """Получает данные всех внутренних блоков."""
         try:
-            # Получаем информацию о хабе
-            hub_info = await self.get_hub_info()
-            hub_unique_id = hub_info.get("unique_id", "S100_1")
-            
             # Получаем топологию
             miscdata = await self.get_miscdata()
             topo = miscdata.get("topo", [])
             
-            # Фильтруем только IDU (внутренние блоки), исключая хаб
-            idu_list = []
-            for item in topo:
-                sys_adr = item.get("sysAdr", 0)
-                address = item.get("address", 0)
-                unique_id = f"S{sys_adr}_{address}"
-                
-                # Пропускаем хаб
-                if unique_id == hub_unique_id:
-                    _LOGGER.debug("Skipping hub device: %s", item.get("name"))
-                    continue
-                
-                # Включаем только внутренние блоки
-                dev_type = item.get("type", "").lower()
-                if dev_type in ["idu", "cassette", "duct", "compact", "fullsize", "one way", "two way"]:
-                    idu_list.append(item)
-            
-            _LOGGER.info("Found %s IDU devices (excluding hub)", len(idu_list))
+            # Фильтруем только IDU (внутренние блоки)
+            idu_list = [item for item in topo if item.get("type") == "IDU"]
             
             if not idu_list:
                 _LOGGER.warning("No IDU devices found in topology")
@@ -251,20 +140,21 @@ class HisenseClient:
                         "model5": raw_data[77] if len(raw_data) > 77 else 0,
                     }
                     
-                    # Преобразуем коды в строки (только основные режимы)
-                    mode_code = result[key]["mode_code"]
-                    if mode_code in MODE_MAP:
-                        result[key]["mode"] = MODE_MAP[mode_code]
+                    # Преобразуем коды в строки
+                    if result[key]["mode_code"] in MODE_MAP:
+                        result[key]["mode"] = MODE_MAP[result[key]["mode_code"]]
                     else:
-                        # Если режим не входит в основные, преобразуем в "cool"
                         result[key]["mode"] = "cool"
                     
-                    fan_code = result[key]["fan_code"]
-                    if fan_code in FAN_MAP:
-                        result[key]["fan"] = FAN_MAP[fan_code]
+                    if result[key]["fan_code"] in FAN_MAP:
+                        result[key]["fan"] = FAN_MAP[result[key]["fan_code"]]
                     else:
-                        # Если скорость не стандартная, преобразуем в "auto"
-                        result[key]["fan"] = "auto"
+                        # Если скорость не стандартная, преобразуем в ближайшую стандартную
+                        fan_code = result[key]["fan_code"]
+                        if fan_code in [16, 32, 64]:  # Дополнительные скорости
+                            result[key]["fan"] = "high"
+                        else:
+                            result[key]["fan"] = "medium"
                     
                     # Определяем статус
                     error = result[key]["error_code"]
@@ -286,30 +176,34 @@ class HisenseClient:
         """Получает данные электросчетчика."""
         url = f"http://{self._host}/cgi/get_meter_pwr.shtml"
         try:
-            async with self._session.get(url, timeout=10) as resp:
+            # Согласно вашему YAML, делаем POST запрос с телом
+            async with self._session.post(
+                url,
+                json={"ids": ["1", "2"], "ip": self._host},
+                timeout=10
+            ) as resp:
                 if resp.status != 200:
                     _LOGGER.warning("Power meter endpoint returned status %s", resp.status)
-                    # Возвращаем None, чтобы показать, что счетчик недоступен
                     return None
                 
-                text = await resp.text()
-                _LOGGER.debug("Raw power meter response: %s", text)
+                data = await resp.json()
+                _LOGGER.debug("Power meter response: %s", data)
                 
-                # Пытаемся извлечь числовое значение
-                # Возможные форматы: просто число, HTML с числом, JSON
-                import re
-                
-                # Удаляем HTML теги, если есть
-                text_clean = re.sub(r'<[^>]+>', '', text)
-                
-                # Ищем число (целое или с плавающей точкой)
-                match = re.search(r'([0-9]+(?:\.[0-9]+)?)', text_clean.strip())
-                if match:
-                    value = float(match.group(1))
-                    _LOGGER.info("Parsed power value: %s W", value)
-                    return value
+                # Извлекаем значение по шаблону из YAML
+                if (data.get("dats") and len(data["dats"]) > 0 and 
+                    data["dats"][0].get("pwr") is not None):
+                    
+                    pwr_value = data["dats"][0]["pwr"]
+                    
+                    # Преобразуем в число
+                    try:
+                        # Возвращаем значение в ваттах
+                        return float(pwr_value)
+                    except (ValueError, TypeError):
+                        _LOGGER.warning("Could not convert power value to float: %s", pwr_value)
+                        return None
                 else:
-                    _LOGGER.warning("Could not parse power value. Cleaned text: %s", text_clean)
+                    _LOGGER.warning("No power data in response: %s", data)
                     return None
                     
         except asyncio.TimeoutError:
@@ -374,10 +268,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     session = aiohttp_client.async_get_clientsession(hass)
     client = HisenseClient(host, session)
     
-    # Получаем информацию о хабе
-    hub_info = await client.get_hub_info()
-    _LOGGER.info("Hub setup: %s", hub_info["name"])
-    
     # Координатор для климатических устройств
     async def update_climate_data():
         data = await client.get_idu_data()
@@ -427,8 +317,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "client": client,
         "coordinator_climate": coordinator_climate,
         "coordinator_sensor": coordinator_sensor,
-        "host": host,
-        "hub_info": hub_info
+        "host": host
     }
     
     # Настраиваем платформы
