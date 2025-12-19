@@ -1,6 +1,11 @@
 """Climate platform for Hisense Multi-IDU."""
 import logging
-from homeassistant.components.climate import ClimateEntity, ClimateEntityFeature, HVACMode
+from homeassistant.components.climate import (
+    ClimateEntity, 
+    ClimateEntityFeature, 
+    HVACMode,
+    HVACAction
+)
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -25,13 +30,25 @@ DEVICE_TO_HVAC = {
     "heat_sup": HVACMode.HEAT
 }
 
+# Маппинг режимов устройства на HVACAction
+DEVICE_TO_HVAC_ACTION = {
+    "cool": HVACAction.COOLING,
+    "heat": HVACAction.HEATING,
+    "dry": HVACAction.DRYING,
+    "fan_only": HVACAction.FAN,
+    "auto_dry": HVACAction.DRYING,
+    "refresh": HVACAction.COOLING,
+    "sleep": HVACAction.COOLING,
+    "heat_sup": HVACAction.HEATING
+}
+
 HVAC_TO_DEVICE = {v: k for k, v in DEVICE_TO_HVAC.items()}
 
 # Доступные скорости вентилятора в Home Assistant (только основные)
 HA_FAN_MODES = ["auto", "low", "medium", "high"]
 
 class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
-    """Representation of a Hisense indoor unit."""
+    """Representation of a Hisense indoor unit (as air conditioner)."""
     
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_supported_features = (
@@ -45,7 +62,11 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
     _attr_fan_modes = HA_FAN_MODES
     _attr_min_temp = 16
     _attr_max_temp = 30
+    # ДОБАВЛЕНО: шаг изменения температуры 1°C
     _attr_target_temperature_step = 1
+    
+    # Опционально: задать иконку как кондиционер
+    _attr_icon = "mdi:air-conditioner"
     
     def __init__(self, coordinator, client, uid, device_info, entity_name=None):
         super().__init__(coordinator)
@@ -117,6 +138,41 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         return DEVICE_TO_HVAC.get(mode, HVACMode.COOL)
     
     @property
+    def hvac_action(self):
+        """ВОЗВРАЩАЕТ ТЕКУЩЕЕ ДЕЙСТВИЕ КОНДИЦИОНЕРА (очень важно для правильного отображения!)."""
+        self._update_data()
+        
+        if not self._current_data:
+            return HVACAction.OFF
+        
+        power = self._current_data.get("power", 0)
+        if power == 0:
+            return HVACAction.OFF
+        
+        mode = self._current_data.get("mode", "cool")
+        
+        # Определяем, активно ли устройство (охлаждает/греет) или idle
+        # Для этого можно использовать разницу температур
+        current_temp = self._current_data.get("room_temp")
+        target_temp = self._current_data.get("set_temp", 24)
+        
+        if current_temp is not None:
+            if mode == "cool" and current_temp > target_temp:
+                return HVACAction.COOLING
+            elif mode == "heat" and current_temp < target_temp:
+                return HVACAction.HEATING
+            elif mode == "dry":
+                return HVACAction.DRYING
+            elif mode == "fan_only":
+                return HVACAction.FAN
+            else:
+                # Если температура достигла целевой, устройство idle
+                return HVACAction.IDLE
+        else:
+            # Если нет текущей температуры, используем базовый маппинг
+            return DEVICE_TO_HVAC_ACTION.get(mode, HVACAction.IDLE)
+    
+    @property
     def fan_mode(self):
         self._update_data()
         fan = self._current_data.get("fan", "auto")
@@ -134,11 +190,12 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
     
     @property
     def extra_state_attributes(self):
-        """Возвращает дополнительные атрибуты."""
+        """Возвращает дополнительные атрибуты для кондиционера."""
         self._update_data()
         attrs = {}
         
         if self._current_data:
+            # Основные атрибуты
             attrs.update({
                 "error_code": self._current_data.get("error_code", 0),
                 "status": self._current_data.get("status", "unknown"),
@@ -148,8 +205,16 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
                 "pipe_temperature": self._current_data.get("pipe_temp"),
                 "is_locked": self._current_data.get("model1", 0) == 1,
                 "original_fan": self._current_data.get("fan", ""),
-                "original_mode": self._current_data.get("mode", "")
+                "original_mode": self._current_data.get("mode", ""),
+                "device_type": "air_conditioner",  # Явно указываем тип устройства
+                "hvac_action": self.hvac_action,  # Добавляем текущее действие
             })
+            
+            # Только для отладки - сырые данные
+            if "raw_data" in self._current_data:
+                attrs["raw_power_state"] = self._current_data.get("power")
+                attrs["raw_mode_code"] = self._current_data.get("mode_code")
+                attrs["raw_fan_code"] = self._current_data.get("fan_code")
         
         return attrs
     
@@ -158,6 +223,9 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         temperature = kwargs.get(ATTR_TEMPERATURE)
         if temperature is None:
             return
+        
+        # Округляем до целого (так как шаг 1°C)
+        temperature = round(temperature)
         
         self._update_data()
         if not self._current_data:
@@ -295,7 +363,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         "identifiers": {(DOMAIN, host)},
         "name": hub_device_name,  # ФИКСИРОВАННОЕ имя устройства
         "manufacturer": "Hisense",
-        "model": "Multi-IDU Hub",
+        "model": "Multi-IDU Air Conditioner",  # Изменили модель
         "configuration_url": f"http://{host}"
     }
     
@@ -305,6 +373,19 @@ async def async_setup_entry(hass, entry, async_add_entities):
             if unit_data:
                 # Получаем оригинальное имя объекта (Entity) из данных устройства
                 original_name = unit_data.get("name", f"IDU {uid}")
+                
+                # Преобразуем технические имена в читаемые
+                display_name = original_name
+                if "one way cassette" in original_name.lower():
+                    display_name = original_name.replace("one way cassette", "Кассетный кондиционер")
+                elif "two way cassette" in original_name.lower():
+                    display_name = original_name.replace("two way cassette", "Двусторонний кассетный кондиционер")
+                elif "compact cassette" in original_name.lower():
+                    display_name = original_name.replace("compact cassette", "Компактный кондиционер")
+                elif "duct" in original_name.lower():
+                    display_name = original_name.replace("duct", "Канальный кондиционер")
+                elif "fullsize" in original_name.lower():
+                    display_name = original_name.replace("fullsize", "Полноразмерный кондиционер")
                 
                 # Создаем информацию об устройстве для этого блока
                 # НЕ МЕНЯЕМ поле "name" в device_info - оно должно остаться как у хаба
@@ -317,16 +398,17 @@ async def async_setup_entry(hass, entry, async_add_entities):
                 
                 entity_device_info.update({
                     "via_device": (DOMAIN, host),
+                    "model": unit_data.get("indoor_name", "Air Conditioner"),  # Модель кондиционера
                 })
                 
-                # Создаем объект с оригинальным именем (Entity), но с device_info хаба
+                # Создаем объект с именем кондиционера
                 entities.append(HisenseIDUClimate(
-                    coordinator, client, uid, entity_device_info, entity_name=original_name
+                    coordinator, client, uid, entity_device_info, entity_name=display_name
                 ))
+                _LOGGER.debug("Created air conditioner: %s", display_name)
     
     if entities:
         async_add_entities(entities, update_before_add=True)
-        _LOGGER.info("Created %s climate entities. Hub name: %s", len(entities), hub_device_name)
+        _LOGGER.info("Created %s air conditioner entities. Hub name: %s", len(entities), hub_device_name)
     else:
-        _LOGGER.warning("No climate entities created. Check device connection.")
-
+        _LOGGER.warning("No air conditioner entities created. Check device connection.")
