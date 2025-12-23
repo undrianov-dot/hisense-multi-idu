@@ -25,7 +25,13 @@ DEVICE_TO_HVAC = {
     "heat_sup": HVACMode.HEAT
 }
 
-HVAC_TO_DEVICE = {v: k for k, v in DEVICE_TO_HVAC.items()}
+HVAC_TO_DEVICE = {
+    HVACMode.COOL: "cool",
+    HVACMode.HEAT: "heat", 
+    HVACMode.DRY: "dry",
+    HVACMode.FAN_ONLY: "fan_only",
+}
+
 
 # Доступные скорости вентилятора в Home Assistant (только основные)
 HA_FAN_MODES = ["auto", "low", "medium", "high"]
@@ -180,41 +186,29 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         if success:
             await self.coordinator.async_request_refresh()
     
-    async def async_set_hvac_mode(self, hvac_mode):
-        """Установить режим HVAC."""
-        if hvac_mode == HVACMode.OFF:
-            # Выключить устройство
-            success = await self._client.set_idu(
-                sys=self._sys,
-                addr=self._addr,
-                onoff=0,
-                mode=MODE_COOL,
-                fan=4,
-                temp=24
-            )
-        else:
-            # Включить устройство с нужным режимом
-            self._update_data()
-            
-            # Преобразуем HVACMode в режим устройства
-            device_mode = HVAC_TO_DEVICE.get(hvac_mode, "cool")
-            mode_code = MODE_REVERSE_MAP.get(device_mode, MODE_COOL)
-            
-            # Используем текущую температуру и скорость вентилятора
-            current_temp = self._current_data.get("set_temp", 24)
-            fan_code = self._current_data.get("fan_code", 4)
-            
-            success = await self._client.set_idu(
-                sys=self._sys,
-                addr=self._addr,
-                onoff=1,
-                mode=mode_code,
-                fan=fan_code,
-                temp=int(current_temp)
-            )
+        # Преобразуем HVACMode в режим устройства
+        device_mode = HVAC_TO_DEVICE.get(hvac_mode, "cool")
+        mode_code = MODE_REVERSE_MAP.get(device_mode, MODE_COOL)
         
-        if success:
-            await self.coordinator.async_request_refresh()
+        _LOGGER.debug(f"Device mode: {device_mode}, Mode code: {mode_code}")
+        
+        # Используем текущую температуру и скорость вентилятора
+        current_temp = self._current_data.get("set_temp", 24)
+        fan_code = self._current_data.get("fan_code", 4)
+        
+        success = await self._client.set_idu(
+            sys=self._sys,
+            addr=self._addr,
+            onoff=1,
+            mode=mode_code,  # <-- Теперь здесь правильный код
+            fan=fan_code,
+            temp=int(current_temp)
+        )
+    
+    if success:
+        await self.coordinator.async_request_refresh()
+    else:
+        _LOGGER.error(f"Failed to set HVAC mode {hvac_mode} for {self._uid}")
     
     async def async_set_fan_mode(self, fan_mode):
         """Установить скорость вентилятора."""
@@ -329,4 +323,5 @@ async def async_setup_entry(hass, entry, async_add_entities):
         _LOGGER.info("Created %s climate entities. Hub name: %s", len(entities), hub_device_name)
     else:
         _LOGGER.warning("No climate entities created. Check device connection.")
+
 
