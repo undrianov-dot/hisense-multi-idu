@@ -35,20 +35,24 @@ FAN_MID = 4          # Средняя
 FAN_LOW = 8          # Низкая
 # Убрали дополнительные скорости
 
-# Маппинг для Home Assistant (без режима AUTO)
 MODE_MAP = {
     MODE_COOL: "cool",
     MODE_DRY: "dry",
     MODE_FAN_ONLY: "fan_only",
     MODE_HEAT: "heat",
-    MODE_AUTO_DRY: "dry",  # Перенаправляем в осушение
-    MODE_REFRESH: "cool",  # Перенаправляем в охлаждение
-    MODE_SLEEP: "cool",    # Перенаправляем в охлаждение
-    MODE_HEAT_SUP: "heat"  # Перенаправляем в обогрев
+    MODE_AUTO_DRY: "dry",
+    MODE_REFRESH: "cool",
+    MODE_SLEEP: "cool",
+    MODE_HEAT_SUP: "heat"
 }
 
-MODE_REVERSE_MAP = {v: k for k, v in MODE_MAP.items() if v in ["cool", "heat", "dry", "fan_only"]}
-
+# ВАЖНО: Исправленный MODE_REVERSE_MAP
+MODE_REVERSE_MAP = {
+    "cool": MODE_COOL,
+    "dry": MODE_DRY,
+    "fan_only": MODE_FAN_ONLY,
+    "heat": MODE_HEAT
+}
 # Маппинг для скоростей вентилятора (только основные)
 FAN_MAP = {
     FAN_AUTO: "auto",
@@ -58,3 +62,4 @@ FAN_MAP = {
 }
 
 FAN_REVERSE_MAP = {v: k for k, v in FAN_MAP.items()}
+
