@@ -5,8 +5,8 @@ DOMAIN = "hisense_multi_idu"
 CONF_HOST = "host"
 
 # Интервалы обновления по умолчанию (секунды)
-DEFAULT_SCAN_INTERVAL_CLIMATE = 30
-DEFAULT_SCAN_INTERVAL_SENSOR = 60
+DEFAULT_SCAN_INTERVAL_CLIMATE = 10
+DEFAULT_SCAN_INTERVAL_SENSOR = 30
 
 # Индексы данных в массиве data[]
 DATA_ONOFF = 28      # Состояние вкл/выкл (0=OFF, 1=ON)
@@ -62,4 +62,5 @@ FAN_MAP = {
 }
 
 FAN_REVERSE_MAP = {v: k for k, v in FAN_MAP.items()}
+
 
