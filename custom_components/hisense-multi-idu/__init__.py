@@ -66,7 +66,44 @@ class HisenseClient:
         except Exception as e:
             _LOGGER.error("Failed to get miscdata: %s", e)
             return None
-    
+     async def set_damper(self, sys: int, addr: int, command):
+        """Установить положение жалюзи."""
+        try:
+            # Определяем регистр и значение для жалюзи
+            # Предполагаем, что жалюзи управляются через регистр 80
+            reg_addr = 80
+            reg_val = command if isinstance(command, list) else [command]
+            
+            cmd_list = [{
+                "seq": 1,
+                "sys": sys,
+                "iduAddr": addr,
+                "regAddr": reg_addr,
+                "regVal": reg_val
+            }]
+            
+            url = f"http://{self._host}/cgi/set_idu.shtml"
+            async with self._session.post(
+                url,
+                json={"ip": "127.0.0.1", "cmdList": cmd_list},
+                timeout=10
+            ) as resp:
+                if resp.status != 200:
+                    _LOGGER.error("HTTP error when setting damper: %s", resp.status)
+                    return False
+                
+                data = await resp.json(content_type=None)
+                success = data.get("status") == "success"
+                if success:
+                    _LOGGER.debug("Successfully set damper for S%s_%s: %s", 
+                                sys, addr, command)
+                else:
+                    _LOGGER.error("Device returned error when setting damper: %s", data)
+                return success
+                
+        except Exception as e:
+            _LOGGER.error("Failed to set damper: %s", e)
+            return False
     async def get_idu_data(self, force_refresh=False):
         """Получает данные всех внутренних блоков."""
         try:
@@ -353,3 +390,4 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id, None)
     return unload_ok
+
