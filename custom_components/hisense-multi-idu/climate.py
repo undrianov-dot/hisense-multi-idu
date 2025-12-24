@@ -6,9 +6,8 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     DOMAIN, MODE_MAP, MODE_REVERSE_MAP, 
-    FAN_MAP, FAN_REVERSE_MAP, DAMPER_MAP, DAMPER_REVERSE_MAP,
-    MODE_COOL, MODE_HEAT, MODE_DRY, MODE_FAN_ONLY,
-    DAMPER_SWING, DAMPER_CLOSED, DAMPER_OPEN
+    FAN_MAP, FAN_REVERSE_MAP,
+    MODE_COOL, MODE_HEAT, MODE_DRY, MODE_FAN_ONLY
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -37,17 +36,6 @@ HVAC_TO_DEVICE = {
 # Доступные скорости вентилятора в Home Assistant (только основные)
 HA_FAN_MODES = ["auto", "low", "medium", "high"]
 
-# Доступные режимы жалюзи для Home Assistant
-HA_SWING_MODES = ["off", "vertical", "horizontal", "both"]
-
-# Маппинг для режимов жалюзи в HomeKit через Yahka
-SWING_TO_DAMPER = {
-    "off": 1,           # Закрыто/фиксированное положение
-    "vertical": 6,      # Качание вертикальных жалюзи
-    "horizontal": 6,    # Качание горизонтальных жалюзи (если поддерживается)
-    "both": 6           # Качание всех жалюзи
-}
-
 class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
     """Representation of a Hisense indoor unit."""
     
@@ -56,13 +44,11 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         ClimateEntityFeature.TARGET_TEMPERATURE |
         ClimateEntityFeature.FAN_MODE |
         ClimateEntityFeature.TURN_OFF |
-        ClimateEntityFeature.TURN_ON |
-        ClimateEntityFeature.SWING_MODE  # Добавили поддержку управления жалюзи
+        ClimateEntityFeature.TURN_ON
     )
     # Убрали HVACMode.AUTO
     _attr_hvac_modes = [HVACMode.OFF, HVACMode.COOL, HVACMode.HEAT, HVACMode.DRY, HVACMode.FAN_ONLY]
     _attr_fan_modes = HA_FAN_MODES
-    _attr_swing_modes = HA_SWING_MODES  # Режимы жалюзи
     _attr_min_temp = 16
     _attr_max_temp = 30
     _attr_target_temperature_step = 1
@@ -98,11 +84,8 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
             "onoff": 1,
             "mode": MODE_COOL,
             "fan": 4,
-            "temp": 24,
-            "swing": "off"  # Добавили кэш для жалюзи
+            "temp": 24
         }
-        # Текущий режим жалюзи
-        self._current_swing_mode = "off"
     
     def _update_data(self):
         """Обновляет данные из координатора."""
@@ -119,26 +102,10 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
                 "onoff": unit_data.get("power", 1),
                 "mode": unit_data.get("mode_code", MODE_COOL),
                 "fan": unit_data.get("fan_code", 4),
-                "temp": unit_data.get("set_temp", 24),
-                "swing": self._current_swing_mode
+                "temp": unit_data.get("set_temp", 24)
             }
-            
-            # Определяем текущий режим жалюзи из данных устройства
-            damper_code = unit_data.get("damper_vertical", 0)
-            if damper_code == DAMPER_SWING:  # Код 6 - качание
-                self._current_swing_mode = "vertical"
-            elif damper_code == DAMPER_CLOSED:  # Код 1 - закрыто
-                self._current_swing_mode = "off"
-            else:
-                self._current_swing_mode = "off"  # По умолчанию
         else:
             self._current_data = {}
-    
-    @property
-    def swing_mode(self):
-        """Возвращает текущий режим жалюзи."""
-        self._update_data()
-        return self._current_swing_mode
     
     @property
     def available(self):
@@ -204,11 +171,7 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
                 "original_mode": self._current_data.get("mode", ""),
                 "sys": self._sys,
                 "addr": self._addr,
-                "uid": self._uid,
-                # Добавляем информацию о жалюзи
-                "damper_vertical": self._current_data.get("damper_vertical", 0),
-                "damper_horizontal": self._current_data.get("damper_horizontal", 0),
-                "swing_mode_raw": self._current_swing_mode
+                "uid": self._uid
             })
         
         return attrs
@@ -339,37 +302,6 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         else:
             _LOGGER.error("Failed to set fan mode for %s", self._uid)
     
-    async def async_set_swing_mode(self, swing_mode):
-        """Установить режим жалюзи."""
-        if swing_mode not in HA_SWING_MODES:
-            _LOGGER.error("Invalid swing mode: %s", swing_mode)
-            return
-        
-        # Конвертируем режим Home Assistant в код устройства
-        damper_code = SWING_TO_DAMPER.get(swing_mode, 1)
-        
-        # Отправляем команду на устройство
-        success = await self._client.set_damper(
-            sys=self._sys,
-            addr=self._addr,
-            command=damper_code
-        )
-        
-        if success:
-            self._current_swing_mode = swing_mode
-            self._last_command["swing"] = swing_mode
-            
-            # Обновляем локальный кэш
-            if swing_mode == "off":
-                self._current_data["damper_vertical"] = DAMPER_CLOSED
-            elif swing_mode == "vertical":
-                self._current_data["damper_vertical"] = DAMPER_SWING
-            
-            _LOGGER.debug("Swing mode set successfully for %s to %s", self._uid, swing_mode)
-            await self.coordinator.async_request_refresh()
-        else:
-            _LOGGER.error("Failed to set swing mode for %s", self._uid)
-    
     async def async_turn_on(self):
         """Включить кондиционер."""
         success = await self._client.set_idu(
@@ -404,4 +336,101 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
             _LOGGER.debug("Device %s turned off", self._uid)
             await self.coordinator.async_request_refresh()
 
-# Остальной код async_setup_entry без изменений...
+async def async_setup_entry(hass, entry, async_add_entities):
+    """Set up climate entities."""
+    data = hass.data[DOMAIN][entry.entry_id]
+    coordinator = data["coordinator_climate"]
+    client = data["client"]
+    host = data["host"]
+    
+    entities = []
+    
+    # ФИКСИРОВАННОЕ ИМЯ УСТРОЙСТВА (Device) - это изменит название устройства в HA
+    hub_device_name = f"Hisense Multi-IDU Hub ({host})"
+    
+    # Базовая информация об устройстве (Device)
+    base_device_info = {
+        "identifiers": {(DOMAIN, host)},
+        "name": hub_device_name,  # ФИКСИРОВАННОЕ имя устройства
+        "manufacturer": "Hisense",
+        "model": "Multi-IDU Hub",
+        "configuration_url": f"http://{host}"
+    }
+    
+    # Создаем сущности для каждого кондиционера
+    coordinator_data = coordinator.data
+    _LOGGER.info("Setting up climate entities. Coordinator data type: %s, value: %s", 
+                 type(coordinator_data), coordinator_data)
+    
+    if isinstance(coordinator_data, dict) and coordinator_data:
+        for uid, unit_data in coordinator_data.items():
+            _LOGGER.info("Processing device UID: %s, data: %s", uid, unit_data)
+            
+            if not unit_data:
+                _LOGGER.warning("Empty data for device %s, skipping", uid)
+                continue
+            
+            # Получаем оригинальное имя объекта (Entity) из данных устройства
+            original_name = unit_data.get("name", f"IDU {uid}")
+            
+            # Создаем информацию об устройстве для этого блока
+            entity_device_info = base_device_info.copy()
+            
+            # Добавляем дополнительную информацию, НЕ ТРОГАЯ "name"
+            suggested_area = unit_data.get("pppname") or unit_data.get("ppname") or unit_data.get("pname")
+            if suggested_area:
+                entity_device_info["suggested_area"] = suggested_area
+            
+            entity_device_info.update({
+                "via_device": (DOMAIN, host),
+            })
+            
+            # Создаем объект с оригинальным именем (Entity), но с device_info хаба
+            entities.append(HisenseIDUClimate(
+                coordinator, client, uid, entity_device_info, entity_name=original_name
+            ))
+            _LOGGER.info("Created climate entity for %s with name: %s", uid, original_name)
+    else:
+        _LOGGER.warning("No valid data in coordinator. Type: %s, Data: %s", 
+                       type(coordinator_data), coordinator_data)
+        # Попробуем получить данные напрямую
+        try:
+            _LOGGER.info("Trying to get data directly from client")
+            direct_data = await client.get_idu_data(force_refresh=True)
+            if direct_data and isinstance(direct_data, dict):
+                _LOGGER.info("Got data directly: %s devices", len(direct_data))
+                for uid, unit_data in direct_data.items():
+                    if unit_data:
+                        original_name = unit_data.get("name", f"IDU {uid}")
+                        
+                        entity_device_info = base_device_info.copy()
+                        suggested_area = unit_data.get("pppname") or unit_data.get("ppname") or unit_data.get("pname")
+                        if suggested_area:
+                            entity_device_info["suggested_area"] = suggested_area
+                        
+                        entity_device_info.update({"via_device": (DOMAIN, host)})
+                        
+                        entities.append(HisenseIDUClimate(
+                            coordinator, client, uid, entity_device_info, entity_name=original_name
+                        ))
+                        _LOGGER.info("Created climate entity from direct data: %s", uid)
+        except Exception as e:
+            _LOGGER.error("Failed to get direct data: %s", e)
+    
+    if entities:
+        async_add_entities(entities, update_before_add=True)
+        _LOGGER.info("Successfully created %s climate entities. Hub name: %s", 
+                    len(entities), hub_device_name)
+    else:
+        _LOGGER.error("No climate entities created. Check device connection to %s", host)
+        # Создаем хотя бы одну тестовую сущность для отладки
+        test_uid = "S1_1"
+        entity_device_info = base_device_info.copy()
+        entity_device_info.update({"via_device": (DOMAIN, host)})
+        
+        test_entity = HisenseIDUClimate(
+            coordinator, client, test_uid, entity_device_info, entity_name="Test IDU"
+        )
+        entities.append(test_entity)
+        async_add_entities(entities, update_before_add=True)
+        _LOGGER.warning("Created test entity for debugging")
