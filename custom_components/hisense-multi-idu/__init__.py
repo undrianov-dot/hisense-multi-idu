@@ -66,7 +66,8 @@ class HisenseClient:
         except Exception as e:
             _LOGGER.error("Failed to get miscdata: %s", e)
             return None
-     async def set_damper(self, sys: int, addr: int, command):
+    
+    async def set_damper(self, sys: int, addr: int, command):
         """Установить положение жалюзи."""
         try:
             # Определяем регистр и значение для жалюзи
@@ -104,6 +105,7 @@ class HisenseClient:
         except Exception as e:
             _LOGGER.error("Failed to set damper: %s", e)
             return False
+    
     async def get_idu_data(self, force_refresh=False):
         """Получает данные всех внутренних блоков."""
         try:
@@ -195,6 +197,10 @@ class HisenseClient:
                         "error_code": raw_data[35] if len(raw_data) > 35 else 0,
                         "room_temp": raw_data[38] if len(raw_data) > 38 else None,
                         "pipe_temp": raw_data[39] if len(raw_data) > 39 else None,
+                        
+                        # Добавляем данные о жалюзи
+                        "damper_vertical": raw_data[40] if len(raw_data) > 40 else 0,
+                        "damper_horizontal": raw_data[41] if len(raw_data) > 41 else 0,
                         
                         # Регистры блокировки
                         "model1": raw_data[72] if len(raw_data) > 72 else 0,
@@ -390,5 +396,3 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id, None)
     return unload_ok
-
-
