@@ -44,7 +44,7 @@ class HisenseClient:
             async with self._session.post(
                 url, 
                 json={"ip": "127.0.0.1"},
-                timeout=10
+                timeout=5  # Уменьшили таймаут для скорости
             ) as resp:
                 if resp.status != 200:
                     raise UpdateFailed(f"HTTP error: {resp.status}")
@@ -88,7 +88,7 @@ class HisenseClient:
             async with self._session.post(
                 url,
                 json={"ip": "127.0.0.1", "devs": devs},
-                timeout=15
+                timeout=8  # Уменьшили таймаут
             ) as resp:
                 if resp.status != 200:
                     raise UpdateFailed(f"HTTP error: {resp.status}")
@@ -172,7 +172,7 @@ class HisenseClient:
                 
         except Exception as e:
             _LOGGER.error("Failed to get IDU data: %s", e)
-            raise UpdateFailed(f"Failed to get IDU data: {e}")
+            return {}  # Возвращаем пустой словарь вместо исключения
     
     async def get_power_data(self):
         """Получает данные электросчетчика через отдельную функцию."""
@@ -188,19 +188,9 @@ class HisenseClient:
         try:
             cmd_list = []
             
-            # Команда для управления блокировками (если нужно)
-            if "lock_mode" in kwargs:
-                cmd_list.append({
-                    "seq": 1,
-                    "sys": sys,
-                    "iduAddr": addr,
-                    "regAddr": 72,
-                    "regVal": kwargs.get("lock_mode", [2, 0, 0, 0, 0, 0])
-                })
-            
             # Основная команда управления
             cmd_list.append({
-                "seq": len(cmd_list) + 1,
+                "seq": 1,
                 "sys": sys,
                 "iduAddr": addr,
                 "regAddr": 78,
@@ -217,14 +207,17 @@ class HisenseClient:
             async with self._session.post(
                 url,
                 json={"ip": "127.0.0.1", "cmdList": cmd_list},
-                timeout=10
+                timeout=5  # Уменьшили таймаут для скорости
             ) as resp:
                 if resp.status != 200:
                     _LOGGER.error("HTTP error when setting IDU: %s", resp.status)
                     return False
                 
                 data = await resp.json(content_type=None)
-                return data.get("status") == "success"
+                success = data.get("status") == "success"
+                if not success:
+                    _LOGGER.error("Device returned error: %s", data)
+                return success
                 
         except Exception as e:
             _LOGGER.error("Failed to set IDU: %s", e)
@@ -242,8 +235,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def update_climate_data():
         data = await client.get_idu_data()
         if not data:
-            raise UpdateFailed("No climate data received")
-        return data
+            _LOGGER.warning("No climate data received, device might be offline")
+        return data or {}
     
     coordinator_climate = DataUpdateCoordinator(
         hass,
@@ -270,10 +263,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Первоначальное обновление данных
     try:
         await coordinator_climate.async_config_entry_first_refresh()
-        _LOGGER.info("Climate coordinator initialized successfully")
+        _LOGGER.info("Climate coordinator initialized successfully. Found %s devices", 
+                    len(coordinator_climate.data) if coordinator_climate.data else 0)
     except Exception as e:
         _LOGGER.error("Failed to refresh climate data: %s", e)
-        return False
+        # Не прерываем настройку, продолжаем с пустыми данными
     
     try:
         await coordinator_sensor.async_config_entry_first_refresh()
