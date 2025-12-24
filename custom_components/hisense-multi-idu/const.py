@@ -17,9 +17,9 @@ DATA_ERROR_CODE = 35 # Код ошибки
 DATA_ROOM_TEMP = 38  # Температура в помещении
 DATA_PIPE_TEMP = 39  # Температура трубки
 
-# Добавляем индексы для управления жалюзи (если известны)
-DATA_DAMPER_VERTICAL = 40   # Вертикальные жалюзи (пример)
-DATA_DAMPER_HORIZONTAL = 41 # Горизонтальные жалюзи (пример)
+# Добавляем индексы для управления жалюзи
+DATA_DAMPER_VERTICAL = 40   # Вертикальные жалюзи
+DATA_DAMPER_HORIZONTAL = 41 # Горизонтальные жалюзи
 
 # Коды режимов работы (из данных устройства)
 MODE_COOL = 2        # Охлаждение
@@ -90,3 +90,11 @@ DAMPER_MAP = {
 }
 
 DAMPER_REVERSE_MAP = {v: k for k, v in DAMPER_MAP.items()}
+
+# Маппинг для режимов жалюзи в HomeKit через swing_mode
+SWING_TO_DAMPER = {
+    "off": DAMPER_CLOSED,
+    "vertical": DAMPER_SWING,
+    "horizontal": DAMPER_SWING,
+    "both": DAMPER_SWING
+}
