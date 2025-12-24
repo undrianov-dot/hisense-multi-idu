@@ -18,7 +18,7 @@ from .const import (
 from .power_meter import fetch_power_data
 
 _LOGGER = logging.getLogger(__name__)
-PLATFORMS = ["climate", "sensor", "cover"]
+PLATFORMS = ["climate", "sensor"]
 
 class HisenseClient:
     """Клиент для взаимодействия с устройством Hisense Multi-IDU."""
@@ -66,45 +66,6 @@ class HisenseClient:
         except Exception as e:
             _LOGGER.error("Failed to get miscdata: %s", e)
             return None
-    
-    async def set_damper(self, sys: int, addr: int, command):
-        """Установить положение жалюзи."""
-        try:
-            # Определяем регистр и значение для жалюзи
-            # Предполагаем, что жалюзи управляются через регистр 80
-            reg_addr = 80
-            reg_val = command if isinstance(command, list) else [command]
-            
-            cmd_list = [{
-                "seq": 1,
-                "sys": sys,
-                "iduAddr": addr,
-                "regAddr": reg_addr,
-                "regVal": reg_val
-            }]
-            
-            url = f"http://{self._host}/cgi/set_idu.shtml"
-            async with self._session.post(
-                url,
-                json={"ip": "127.0.0.1", "cmdList": cmd_list},
-                timeout=10
-            ) as resp:
-                if resp.status != 200:
-                    _LOGGER.error("HTTP error when setting damper: %s", resp.status)
-                    return False
-                
-                data = await resp.json(content_type=None)
-                success = data.get("status") == "success"
-                if success:
-                    _LOGGER.debug("Successfully set damper for S%s_%s: %s", 
-                                sys, addr, command)
-                else:
-                    _LOGGER.error("Device returned error when setting damper: %s", data)
-                return success
-                
-        except Exception as e:
-            _LOGGER.error("Failed to set damper: %s", e)
-            return False
     
     async def get_idu_data(self, force_refresh=False):
         """Получает данные всех внутренних блоков."""
@@ -197,10 +158,6 @@ class HisenseClient:
                         "error_code": raw_data[35] if len(raw_data) > 35 else 0,
                         "room_temp": raw_data[38] if len(raw_data) > 38 else None,
                         "pipe_temp": raw_data[39] if len(raw_data) > 39 else None,
-                        
-                        # Добавляем данные о жалюзи
-                        "damper_vertical": raw_data[40] if len(raw_data) > 40 else 0,
-                        "damper_horizontal": raw_data[41] if len(raw_data) > 41 else 0,
                         
                         # Регистры блокировки
                         "model1": raw_data[72] if len(raw_data) > 72 else 0,
