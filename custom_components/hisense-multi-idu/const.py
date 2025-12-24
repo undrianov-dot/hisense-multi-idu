@@ -47,6 +47,7 @@ DAMPER_POSITION_1 = 3  # Позиция 1
 DAMPER_POSITION_2 = 4  # Позиция 2
 DAMPER_POSITION_3 = 5  # Позиция 3
 DAMPER_SWING = 6    # Качание (свинг)
+DAMPER_STOP = 0     # Остановка (если поддерживается)
 
 MODE_MAP = {
     MODE_COOL: "cool",
