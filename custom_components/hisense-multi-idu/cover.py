@@ -70,20 +70,17 @@ class HisenseDamperCover(CoordinatorEntity, CoverEntity):
             self._current_data = unit_data
             
             # Извлекаем положение жалюзи из данных
-            # Предполагаем, что данные о жалюзи хранятся в raw_data[40]
-            raw_data = unit_data.get("raw_data", [])
-            if len(raw_data) > 40:
-                damper_code = raw_data[40]
-                # Преобразуем код в положение (0-100%)
-                if damper_code == 1:  # Закрыто
-                    self._current_position = 0
-                elif damper_code == 2:  # Открыто
-                    self._current_position = 100
-                elif damper_code == 6:  # Качание
-                    self._current_position = 50  # Среднее положение
-                elif 3 <= damper_code <= 5:  # Позиции 1-3
-                    # Преобразуем в проценты: 3=25%, 4=50%, 5=75%
-                    self._current_position = (damper_code - 2) * 25
+            damper_code = unit_data.get("damper_vertical", 0)
+            # Преобразуем код в положение (0-100%)
+            if damper_code == 1:  # Закрыто
+                self._current_position = 0
+            elif damper_code == 2:  # Открыто
+                self._current_position = 100
+            elif damper_code == 6:  # Качание
+                self._current_position = 50  # Среднее положение
+            elif 3 <= damper_code <= 5:  # Позиции 1-3
+                # Преобразуем в проценты: 3=25%, 4=50%, 5=75%
+                self._current_position = (damper_code - 2) * 25
     
     @property
     def available(self):
@@ -122,16 +119,18 @@ class HisenseDamperCover(CoordinatorEntity, CoverEntity):
     
     async def async_stop_cover(self, **kwargs):
         """Остановить движение жалюзи."""
-        # Отправляем команду остановки (если поддерживается)
+        # Для Hisense обычно используется код 6 для качания (свинга)
+        # Отправляем команду качания, которая также может служить остановкой
         success = await self._client.set_damper(
             sys=self._sys,
             addr=self._addr,
-            command="stop"
+            command=6  # Код качания
         )
         
         if success:
             self._is_opening = False
             self._is_closing = False
+            self._current_position = 50  # Среднее положение при качании
             self.async_write_ha_state()
     
     async def async_set_cover_position(self, **kwargs):
@@ -184,6 +183,23 @@ class HisenseDamperCover(CoordinatorEntity, CoverEntity):
         else:
             return 6  # Качание
 
+    @property
+    def extra_state_attributes(self):
+        """Возвращает дополнительные атрибуты."""
+        self._update_data()
+        attrs = {}
+        
+        if self._current_data:
+            attrs.update({
+                "damper_vertical": self._current_data.get("damper_vertical", 0),
+                "damper_horizontal": self._current_data.get("damper_horizontal", 0),
+                "sys": self._sys,
+                "addr": self._addr,
+                "uid": self._uid
+            })
+        
+        return attrs
+
 
 async def async_setup_entry(hass, entry, async_add_entities):
     """Set up damper cover entities."""
@@ -222,8 +238,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
                     entity_device_info["suggested_area"] = suggested_area
                 
                 # Проверяем, поддерживает ли устройство управление жалюзи
-                raw_data = unit_data.get("raw_data", [])
-                if len(raw_data) > 40:  # Проверяем наличие данных о жалюзи
+                damper_vertical = unit_data.get("damper_vertical", 0)
+                if damper_vertical > 0:  # Если есть данные о жалюзи
                     entities.append(HisenseDamperCover(
                         coordinator, client, uid, entity_device_info, 
                         entity_name=original_name
