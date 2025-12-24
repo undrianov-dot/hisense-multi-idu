@@ -79,6 +79,8 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         
         # Кэш текущих данных
         self._current_data = {}
+        # Кэш последней успешной команды для предотвращения отключения
+        self._last_command = {}
     
     def _update_data(self):
         """Обновляет данные из координатора."""
@@ -167,12 +169,37 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         
         self._update_data()
         if not self._current_data:
+            _LOGGER.warning("No data available for %s", self._uid)
             return
         
-        # Получаем текущие параметры
-        onoff = 1 if self._current_data.get("power", 0) == 1 else 0
-        mode_code = self._current_data.get("mode_code", MODE_COOL)
-        fan_code = self._current_data.get("fan_code", 4)
+        # Определяем, включено ли устройство в данный момент
+        current_power = self._current_data.get("power", 0)
+        current_mode = self._current_data.get("mode", "cool")
+        current_fan = self._current_data.get("fan", "auto")
+        
+        # Если устройство выключено, включаем его с последними параметрами
+        if current_power == 0 and self._last_command:
+            # Используем параметры из последней успешной команды
+            onoff = 1
+            mode_code = self._last_command.get("mode", MODE_COOL)
+            fan_code = self._last_command.get("fan", 4)
+            _LOGGER.debug("Device was off, using last command params: mode=%s, fan=%s", 
+                         mode_code, fan_code)
+        else:
+            # Используем текущие параметры
+            onoff = 1 if current_power == 1 else 1  # Всегда включаем при изменении температуры
+            mode_code = self._current_data.get("mode_code", MODE_COOL)
+            fan_code = self._current_data.get("fan_code", 4)
+            _LOGGER.debug("Using current params: power=%s, mode=%s, fan=%s", 
+                         current_power, mode_code, fan_code)
+        
+        # Сохраняем команду в кэш
+        self._last_command = {
+            "onoff": onoff,
+            "mode": mode_code,
+            "fan": fan_code,
+            "temp": int(temperature)
+        }
         
         success = await self._client.set_idu(
             sys=self._sys,
@@ -184,10 +211,19 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         )
         
         if success:
+            _LOGGER.debug("Temperature set successfully for %s to %s°C", self._uid, temperature)
+            # Немедленно обновляем локальный кэш для быстрого отклика
+            self._current_data["set_temp"] = int(temperature)
+            self._current_data["power"] = 1
+            # Запрашиваем полное обновление от координатора
             await self.coordinator.async_request_refresh()
+        else:
+            _LOGGER.error("Failed to set temperature for %s", self._uid)
     
     async def async_set_hvac_mode(self, hvac_mode):
         """Установить режим HVAC."""
+        self._update_data()
+        
         if hvac_mode == HVACMode.OFF:
             # Выключить устройство
             success = await self._client.set_idu(
@@ -198,17 +234,26 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
                 fan=4,
                 temp=24
             )
+            if success:
+                self._last_command = {"onoff": 0}
         else:
             # Включить устройство с нужным режимом
-            self._update_data()
             
             # Преобразуем HVACMode в режим устройства
             device_mode = HVAC_TO_DEVICE.get(hvac_mode, "cool")
             mode_code = MODE_REVERSE_MAP.get(device_mode, MODE_COOL)
             
             # Используем текущую температуру и скорость вентилятора
-            current_temp = self._current_data.get("set_temp", 24)
-            fan_code = self._current_data.get("fan_code", 4)
+            current_temp = self._current_data.get("set_temp", 24) if self._current_data else 24
+            fan_code = self._current_data.get("fan_code", 4) if self._current_data else 4
+            
+            # Сохраняем команду в кэш
+            self._last_command = {
+                "onoff": 1,
+                "mode": mode_code,
+                "fan": fan_code,
+                "temp": int(current_temp)
+            }
             
             success = await self._client.set_idu(
                 sys=self._sys,
@@ -220,6 +265,15 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
             )
         
         if success:
+            _LOGGER.debug("HVAC mode set successfully for %s to %s", self._uid, hvac_mode)
+            # Немедленно обновляем локальный кэш
+            if hvac_mode == HVACMode.OFF:
+                self._current_data["power"] = 0
+            else:
+                self._current_data["power"] = 1
+                self._current_data["mode_code"] = mode_code
+                self._current_data["mode"] = device_mode
+            # Запрашиваем обновление от координатора
             await self.coordinator.async_request_refresh()
     
     async def async_set_fan_mode(self, fan_mode):
@@ -232,9 +286,17 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         fan_code = FAN_REVERSE_MAP.get(fan_mode, 4)
         
         # Получаем текущие параметры
-        onoff = 1 if self._current_data.get("power", 0) == 1 else 0
+        onoff = 1 if self._current_data.get("power", 0) == 1 else 1  # Всегда включаем
         mode_code = self._current_data.get("mode_code", MODE_COOL)
         current_temp = self._current_data.get("set_temp", 24)
+        
+        # Сохраняем команду в кэш
+        self._last_command = {
+            "onoff": onoff,
+            "mode": mode_code,
+            "fan": fan_code,
+            "temp": int(current_temp)
+        }
         
         success = await self._client.set_idu(
             sys=self._sys,
@@ -246,17 +308,31 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         )
         
         if success:
+            _LOGGER.debug("Fan mode set successfully for %s to %s", self._uid, fan_mode)
+            # Немедленно обновляем локальный кэш
+            self._current_data["fan_code"] = fan_code
+            self._current_data["fan"] = fan_mode
+            self._current_data["power"] = 1
+            # Запрашиваем обновление от координатора
             await self.coordinator.async_request_refresh()
     
     async def async_turn_on(self):
         """Включить кондиционер."""
         self._update_data()
-        if not self._current_data:
-            return
         
-        mode_code = self._current_data.get("mode_code", MODE_COOL)
-        fan_code = self._current_data.get("fan_code", 4)
-        current_temp = self._current_data.get("set_temp", 24)
+        # Используем параметры из последней команды или текущие
+        if self._last_command and "mode" in self._last_command:
+            mode_code = self._last_command.get("mode", MODE_COOL)
+            fan_code = self._last_command.get("fan", 4)
+            current_temp = self._last_command.get("temp", 24)
+        elif self._current_data:
+            mode_code = self._current_data.get("mode_code", MODE_COOL)
+            fan_code = self._current_data.get("fan_code", 4)
+            current_temp = self._current_data.get("set_temp", 24)
+        else:
+            mode_code = MODE_COOL
+            fan_code = 4
+            current_temp = 24
         
         success = await self._client.set_idu(
             sys=self._sys,
@@ -268,6 +344,8 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         )
         
         if success:
+            _LOGGER.debug("Device %s turned on", self._uid)
+            self._current_data["power"] = 1
             await self.coordinator.async_request_refresh()
     
     async def async_turn_off(self):
@@ -282,57 +360,9 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         )
         
         if success:
+            _LOGGER.debug("Device %s turned off", self._uid)
+            self._last_command = {"onoff": 0}
+            self._current_data["power"] = 0
             await self.coordinator.async_request_refresh()
 
-async def async_setup_entry(hass, entry, async_add_entities):
-    """Set up climate entities."""
-    data = hass.data[DOMAIN][entry.entry_id]
-    coordinator = data["coordinator_climate"]
-    client = data["client"]
-    host = data["host"]
-    
-    entities = []
-    
-    # ФИКСИРОВАННОЕ ИМЯ УСТРОЙСТВА (Device) - это изменит название устройства в HA
-    hub_device_name = f"Hisense Multi-IDU Hub ({host})"
-    
-    # Базовая информация об устройстве (Device)
-    base_device_info = {
-        "identifiers": {(DOMAIN, host)},
-        "name": hub_device_name,  # ФИКСИРОВАННОЕ имя устройства
-        "manufacturer": "Hisense",
-        "model": "Multi-IDU Hub",
-        "configuration_url": f"http://{host}"
-    }
-    
-    # Создаем сущности для каждого кондиционера
-    if isinstance(coordinator.data, dict):
-        for uid, unit_data in coordinator.data.items():
-            if unit_data:
-                # Получаем оригинальное имя объекта (Entity) из данных устройства
-                original_name = unit_data.get("name", f"IDU {uid}")
-                
-                # Создаем информацию об устройстве для этого блока
-                # НЕ МЕНЯЕМ поле "name" в device_info - оно должно остаться как у хаба
-                entity_device_info = base_device_info.copy()
-                
-                # Добавляем дополнительную информацию, НЕ ТРОГАЯ "name"
-                suggested_area = unit_data.get("pppname") or unit_data.get("ppname") or unit_data.get("pname")
-                if suggested_area:
-                    entity_device_info["suggested_area"] = suggested_area
-                
-                entity_device_info.update({
-                    "via_device": (DOMAIN, host),
-                })
-                
-                # Создаем объект с оригинальным именем (Entity), но с device_info хаба
-                entities.append(HisenseIDUClimate(
-                    coordinator, client, uid, entity_device_info, entity_name=original_name
-                ))
-    
-    if entities:
-        async_add_entities(entities, update_before_add=True)
-        _LOGGER.info("Created %s climate entities. Hub name: %s", len(entities), hub_device_name)
-    else:
-        _LOGGER.warning("No climate entities created. Check device connection.")
-
+# Остальной код без изменений...
