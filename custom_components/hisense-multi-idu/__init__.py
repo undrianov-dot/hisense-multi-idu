@@ -18,7 +18,7 @@ from .const import (
 from .power_meter import fetch_power_data
 
 _LOGGER = logging.getLogger(__name__)
-PLATFORMS = ["climate", "sensor"]
+PLATFORMS = ["climate", "sensor", "cover"]
 
 class HisenseClient:
     """Клиент для взаимодействия с устройством Hisense Multi-IDU."""
@@ -390,4 +390,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id, None)
     return unload_ok
+
 
