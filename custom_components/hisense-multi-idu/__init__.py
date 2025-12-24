@@ -28,15 +28,15 @@ class HisenseClient:
         self._session = session
         self._miscdata_cache = None
         self._miscdata_timestamp = 0
+        self._last_idu_data = {}  # Кэш последних данных IDU
     
-    async def get_miscdata(self):
+    async def get_miscdata(self, use_cache=True):
         """Получает топологию устройств с кэшированием."""
         import time
         current_time = time.time()
         
         # Кэшируем на 5 минут
-        if (self._miscdata_cache is not None and 
-            current_time - self._miscdata_timestamp < 300):
+        if use_cache and self._miscdata_cache is not None and current_time - self._miscdata_timestamp < 300:
             return self._miscdata_cache
             
         url = f"http://{self._host}/cgi/get_miscdata.shtml"
@@ -44,28 +44,39 @@ class HisenseClient:
             async with self._session.post(
                 url, 
                 json={"ip": "127.0.0.1"},
-                timeout=5  # Уменьшили таймаут для скорости
+                timeout=10
             ) as resp:
                 if resp.status != 200:
-                    raise UpdateFailed(f"HTTP error: {resp.status}")
+                    _LOGGER.warning("HTTP error when getting miscdata: %s", resp.status)
+                    return None
                 
                 data = await resp.json(content_type=None)
                 if data.get("status") != "success":
-                    raise UpdateFailed("API returned error")
+                    _LOGGER.warning("API returned error for miscdata: %s", data)
+                    return None
                 
                 self._miscdata_cache = data.get("miscdata", {})
                 self._miscdata_timestamp = current_time
+                _LOGGER.debug("Got miscdata successfully: %s", list(self._miscdata_cache.keys()))
                 return self._miscdata_cache
                 
+        except asyncio.TimeoutError:
+            _LOGGER.warning("Timeout getting miscdata from %s", self._host)
+            return None
         except Exception as e:
             _LOGGER.error("Failed to get miscdata: %s", e)
-            raise UpdateFailed(f"Failed to get miscdata: {e}")
+            return None
     
-    async def get_idu_data(self):
+    async def get_idu_data(self, force_refresh=False):
         """Получает данные всех внутренних блоков."""
         try:
             # Получаем топологию
-            miscdata = await self.get_miscdata()
+            miscdata = await self.get_miscdata(use_cache=not force_refresh)
+            if not miscdata:
+                _LOGGER.warning("No miscdata received, returning cached data if available")
+                # Возвращаем кэшированные данные, если есть
+                return self._last_idu_data
+            
             topo = miscdata.get("topo", [])
             
             # Фильтруем только IDU (внутренние блоки)
@@ -88,18 +99,28 @@ class HisenseClient:
             async with self._session.post(
                 url,
                 json={"ip": "127.0.0.1", "devs": devs},
-                timeout=8  # Уменьшили таймаут
+                timeout=15
             ) as resp:
                 if resp.status != 200:
-                    raise UpdateFailed(f"HTTP error: {resp.status}")
+                    _LOGGER.warning("HTTP error when getting IDU data: %s", resp.status)
+                    # Возвращаем кэшированные данные
+                    return self._last_idu_data
                 
                 data = await resp.json(content_type=None)
                 if data.get("status") != "success":
-                    raise UpdateFailed("API returned error")
+                    _LOGGER.warning("API returned error for IDU data: %s", data)
+                    # Возвращаем кэшированные данные
+                    return self._last_idu_data
                 
                 # Объединяем данные с топологией
                 result = {}
-                for item in data.get("dats", []):
+                idu_dats = data.get("dats", [])
+                
+                if not idu_dats:
+                    _LOGGER.warning("No IDU data in response")
+                    return self._last_idu_data
+                
+                for item in idu_dats:
                     sys = item.get("sys")
                     addr = item.get("addr")
                     key = f"S{sys}_{addr}"
@@ -113,6 +134,10 @@ class HisenseClient:
                     
                     # Парсим данные
                     raw_data = item.get("data", [])
+                    if len(raw_data) < 40:  # Проверяем, что данных достаточно
+                        _LOGGER.warning("Raw data too short for %s: %s", key, len(raw_data))
+                        continue
+                    
                     result[key] = {
                         "sys": sys,
                         "addr": addr,
@@ -168,11 +193,17 @@ class HisenseClient:
                     else:
                         result[key]["status"] = "on" if result[key]["power"] == 1 else "off"
                 
+                # Кэшируем результат
+                self._last_idu_data = result
+                _LOGGER.debug("Got IDU data for %s devices: %s", len(result), list(result.keys()))
                 return result
                 
+        except asyncio.TimeoutError:
+            _LOGGER.warning("Timeout getting IDU data from %s", self._host)
+            return self._last_idu_data
         except Exception as e:
-            _LOGGER.error("Failed to get IDU data: %s", e)
-            return {}  # Возвращаем пустой словарь вместо исключения
+            _LOGGER.error("Failed to get IDU data: %s", e, exc_info=True)
+            return self._last_idu_data
     
     async def get_power_data(self):
         """Получает данные электросчетчика через отдельную функцию."""
@@ -207,7 +238,7 @@ class HisenseClient:
             async with self._session.post(
                 url,
                 json={"ip": "127.0.0.1", "cmdList": cmd_list},
-                timeout=5  # Уменьшили таймаут для скорости
+                timeout=10
             ) as resp:
                 if resp.status != 200:
                     _LOGGER.error("HTTP error when setting IDU: %s", resp.status)
@@ -215,8 +246,12 @@ class HisenseClient:
                 
                 data = await resp.json(content_type=None)
                 success = data.get("status") == "success"
-                if not success:
-                    _LOGGER.error("Device returned error: %s", data)
+                if success:
+                    _LOGGER.debug("Successfully set IDU S%s_%s: onoff=%s, mode=%s, fan=%s, temp=%s", 
+                                sys, addr, kwargs.get("onoff"), kwargs.get("mode"), 
+                                kwargs.get("fan"), kwargs.get("temp"))
+                else:
+                    _LOGGER.error("Device returned error when setting IDU: %s", data)
                 return success
                 
         except Exception as e:
@@ -233,10 +268,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     # Координатор для климатических устройств
     async def update_climate_data():
-        data = await client.get_idu_data()
-        if not data:
-            _LOGGER.warning("No climate data received, device might be offline")
-        return data or {}
+        try:
+            data = await client.get_idu_data()
+            if not data:
+                _LOGGER.warning("No climate data received, might be first run")
+                return {}
+            return data
+        except Exception as e:
+            _LOGGER.error("Failed to update climate data: %s", e)
+            raise UpdateFailed(f"Failed to update climate data: {e}")
     
     coordinator_climate = DataUpdateCoordinator(
         hass,
@@ -260,20 +300,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL_SENSOR),
     )
     
-    # Первоначальное обновление данных
+    # Пробуем получить данные устройства один раз для инициализации
+    try:
+        _LOGGER.info("Trying to connect to Hisense device at %s", host)
+        initial_data = await client.get_idu_data(force_refresh=True)
+        _LOGGER.info("Initial connection successful. Found %s devices", len(initial_data))
+    except Exception as e:
+        _LOGGER.warning("Initial connection failed: %s", e)
+        initial_data = {}
+    
+    # Первоначальное обновление данных координатора
     try:
         await coordinator_climate.async_config_entry_first_refresh()
-        _LOGGER.info("Climate coordinator initialized successfully. Found %s devices", 
-                    len(coordinator_climate.data) if coordinator_climate.data else 0)
+        _LOGGER.info("Climate coordinator initialized successfully")
     except Exception as e:
         _LOGGER.error("Failed to refresh climate data: %s", e)
-        # Не прерываем настройку, продолжаем с пустыми данными
+        # Устанавливаем пустые данные, но продолжаем настройку
+        coordinator_climate.data = initial_data
     
     try:
         await coordinator_sensor.async_config_entry_first_refresh()
         _LOGGER.info("Sensor coordinator initialized. Data: %s", coordinator_sensor.data)
     except Exception as e:
         _LOGGER.warning("Failed to refresh sensor data: %s", e)
+        coordinator_sensor.data = None
     
     # Сохраняем ссылки
     hass.data[DOMAIN][entry.entry_id] = {
