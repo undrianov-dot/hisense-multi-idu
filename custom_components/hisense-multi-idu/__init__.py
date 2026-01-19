@@ -11,7 +11,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .const import (
     DOMAIN, DEFAULT_SCAN_INTERVAL_CLIMATE, DEFAULT_SCAN_INTERVAL_SENSOR,
-    MODE_MAP, FAN_MAP
+    MODE_MAP, FAN_MAP, DATA_ROOM_TEMP, DATA_PIPE_TEMP
 )
 
 # Импортируем новый модуль
@@ -138,6 +138,16 @@ class HisenseClient:
                         _LOGGER.warning("Raw data too short for %s: %s", key, len(raw_data))
                         continue
                     
+                    # Получаем температуру помещения и трубки с правильными индексами
+                    room_temp = raw_data[DATA_ROOM_TEMP] if len(raw_data) > DATA_ROOM_TEMP else None
+                    pipe_temp = raw_data[DATA_PIPE_TEMP] if len(raw_data) > DATA_PIPE_TEMP else None
+                    
+                    # Корректируем температуру: если room_temp выходит за разумные пределы, используем pipe_temp
+                    if room_temp is not None and (room_temp < 10 or room_temp > 40):
+                        _LOGGER.debug("Room temp %s seems invalid for %s, using pipe temp %s", 
+                                    room_temp, key, pipe_temp)
+                        room_temp = pipe_temp
+                    
                     result[key] = {
                         "sys": sys,
                         "addr": addr,
@@ -151,13 +161,13 @@ class HisenseClient:
                         "tenant_name": topo_info.get("tenantName", ""),
                         
                         # Парсим основные параметры
-                        "power": raw_data[28] if len(raw_data) > 28 else 0,
-                        "mode_code": raw_data[29] if len(raw_data) > 29 else 2,
-                        "fan_code": raw_data[30] if len(raw_data) > 30 else 4,
-                        "set_temp": raw_data[31] if len(raw_data) > 31 else 24,
-                        "error_code": raw_data[35] if len(raw_data) > 35 else 0,
-                        "room_temp": raw_data[38] if len(raw_data) > 38 else None,
-                        "pipe_temp": raw_data[39] if len(raw_data) > 39 else None,
+                        "power": raw_data[DATA_ONOFF] if len(raw_data) > DATA_ONOFF else 0,
+                        "mode_code": raw_data[DATA_MODE] if len(raw_data) > DATA_MODE else 2,
+                        "fan_code": raw_data[DATA_FAN] if len(raw_data) > DATA_FAN else 4,
+                        "set_temp": raw_data[DATA_SET_TEMP] if len(raw_data) > DATA_SET_TEMP else 24,
+                        "error_code": raw_data[DATA_ERROR_CODE] if len(raw_data) > DATA_ERROR_CODE else 0,
+                        "room_temp": room_temp,  # Исправленная температура
+                        "pipe_temp": pipe_temp,  # Температура трубки
                         
                         # Регистры блокировки
                         "model1": raw_data[72] if len(raw_data) > 72 else 0,
