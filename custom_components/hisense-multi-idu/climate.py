@@ -97,13 +97,22 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         unit_data = data.get(self._uid, {})
         if unit_data:
             self._current_data = unit_data
-            # Обновляем кэш последней команды актуальными данными
-            self._last_command = {
-                "onoff": unit_data.get("power", 1),
-                "mode": unit_data.get("mode_code", MODE_COOL),
-                "fan": unit_data.get("fan_code", 4),
-                "temp": unit_data.get("set_temp", 24)
-            }
+            # Обновляем кэш последней команды актуальными данными из устройства
+            # ВАЖНО: не перезаписываем temp если устройство выключено
+            if unit_data.get("power", 0) == 1:  # Только если устройство включено
+                self._last_command = {
+                    "onoff": unit_data.get("power", 1),
+                    "mode": unit_data.get("mode_code", MODE_COOL),
+                    "fan": unit_data.get("fan_code", 4),
+                    "temp": unit_data.get("set_temp", self._last_command.get("temp", 24))
+                }
+            else:  # Если выключено, сохраняем только режим и вентилятор, температуру не трогаем
+                self._last_command.update({
+                    "onoff": 0,
+                    "mode": unit_data.get("mode_code", self._last_command.get("mode", MODE_COOL)),
+                    "fan": unit_data.get("fan_code", self._last_command.get("fan", 4)),
+                    # temp сохраняем из последней команды, не перезаписываем
+                })
         else:
             self._current_data = {}
     
@@ -116,7 +125,7 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
     @property
     def target_temperature(self):
         self._update_data()
-        return self._current_data.get("set_temp", 24)
+        return self._current_data.get("set_temp", self._last_command.get("temp", 24))
     
     @property
     def current_temperature(self):
@@ -171,7 +180,11 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
                 "original_mode": self._current_data.get("mode", ""),
                 "sys": self._sys,
                 "addr": self._addr,
-                "uid": self._uid
+                "uid": self._uid,
+                "last_command_temp": self._last_command.get("temp"),
+                "last_command_mode": self._last_command.get("mode"),
+                "last_command_fan": self._last_command.get("fan"),
+                "last_command_onoff": self._last_command.get("onoff"),
             })
         
         return attrs
@@ -182,54 +195,53 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         if temperature is None:
             return
         
-        # Используем параметры из последней команды
-        onoff = self._last_command.get("onoff", 1)
-        mode_code = self._last_command.get("mode", MODE_COOL)
-        fan_code = self._last_command.get("fan", 4)
+        # Сохраняем температуру в кэш
+        self._last_command["temp"] = int(temperature)
         
-        # Всегда включаем устройство при изменении температуры
-        if onoff == 0:
-            onoff = 1
-            _LOGGER.debug("Device was off, turning on for temperature change")
+        # Обновляем локальный кэш для отображения в интерфейсе
+        self._current_data["set_temp"] = int(temperature)
         
-        success = await self._client.set_idu(
-            sys=self._sys,
-            addr=self._addr,
-            onoff=onoff,
-            mode=mode_code,
-            fan=fan_code,
-            temp=int(temperature)
-        )
-        
-        if success:
-            # Обновляем кэш
-            self._last_command.update({
-                "onoff": onoff,
-                "temp": int(temperature)
-            })
-            # Обновляем локальный кэш
-            self._current_data["set_temp"] = int(temperature)
-            self._current_data["power"] = 1
-            _LOGGER.debug("Temperature set successfully for %s to %s°C", self._uid, temperature)
-            # Запрашиваем обновление от координатора
-            await self.coordinator.async_request_refresh()
+        # Отправляем команду на устройство ТОЛЬКО если оно включено
+        if self._last_command.get("onoff", 0) == 1:
+            success = await self._client.set_idu(
+                sys=self._sys,
+                addr=self._addr,
+                onoff=1,
+                mode=self._last_command.get("mode", MODE_COOL),
+                fan=self._last_command.get("fan", 4),
+                temp=int(temperature)
+            )
+            
+            if success:
+                _LOGGER.debug("Temperature set successfully for %s to %s°C", self._uid, temperature)
+                # Запрашиваем обновление от координатора
+                await self.coordinator.async_request_refresh()
+            else:
+                _LOGGER.error("Failed to set temperature for %s", self._uid)
         else:
-            _LOGGER.error("Failed to set temperature for %s", self._uid)
+            # Устройство выключено - только сохраняем настройки
+            _LOGGER.debug("Device %s is off, temperature %s°C saved for next start", 
+                         self._uid, temperature)
+            # Обновляем состояние в HA без запроса к устройству
+            self.async_write_ha_state()
     
     async def async_set_hvac_mode(self, hvac_mode):
         """Установить режим HVAC."""
         if hvac_mode == HVACMode.OFF:
-            # Выключить устройство
+            # Выключить устройство, сохраняя текущие настройки
             success = await self._client.set_idu(
                 sys=self._sys,
                 addr=self._addr,
-                onoff=0,
-                mode=MODE_COOL,
-                fan=4,
-                temp=24
+                onoff=0,  # Выключаем
+                mode=self._last_command.get("mode", MODE_COOL),
+                fan=self._last_command.get("fan", 4),
+                temp=self._last_command.get("temp", 24)  # Сохраняем последнюю температуру
             )
             if success:
                 self._last_command["onoff"] = 0
+                self._current_data["power"] = 0
+                _LOGGER.debug("Device %s turned off with saved settings", self._uid)
+                await self.coordinator.async_request_refresh()
         else:
             # Включить устройство с нужным режимом
             
@@ -237,9 +249,15 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
             device_mode = HVAC_TO_DEVICE.get(hvac_mode, "cool")
             mode_code = MODE_REVERSE_MAP.get(device_mode, MODE_COOL)
             
-            # Используем текущую температуру
-            current_temp = self._current_data.get("set_temp", 24) if self._current_data else 24
-            fan_code = self._current_data.get("fan_code", 4) if self._current_data else 4
+            # Обновляем кэш
+            self._last_command.update({
+                "onoff": 1,
+                "mode": mode_code
+            })
+            
+            # Используем сохраненную температуру из последней команды
+            current_temp = self._last_command.get("temp", 24)
+            fan_code = self._last_command.get("fan", 4)
             
             success = await self._client.set_idu(
                 sys=self._sys,
@@ -251,89 +269,92 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
             )
             
             if success:
-                self._last_command.update({
-                    "onoff": 1,
-                    "mode": mode_code,
-                    "fan": fan_code,
-                    "temp": int(current_temp)
+                self._current_data.update({
+                    "power": 1,
+                    "mode_code": mode_code,
+                    "mode": device_mode
                 })
-        
-        if success:
-            # Обновляем локальный кэш
-            if hvac_mode == HVACMode.OFF:
-                self._current_data["power"] = 0
+                _LOGGER.debug("Device %s turned on with mode %s, temp %s", 
+                            self._uid, hvac_mode, current_temp)
+                await self.coordinator.async_request_refresh()
             else:
-                self._current_data["power"] = 1
-                self._current_data["mode_code"] = mode_code
-                self._current_data["mode"] = device_mode
-            _LOGGER.debug("HVAC mode set successfully for %s to %s", self._uid, hvac_mode)
-            await self.coordinator.async_request_refresh()
-        else:
-            _LOGGER.error("Failed to set HVAC mode for %s", self._uid)
+                _LOGGER.error("Failed to set HVAC mode for %s", self._uid)
     
     async def async_set_fan_mode(self, fan_mode):
         """Установить скорость вентилятора."""
         # Преобразуем строку в код устройства (только основные скорости)
         fan_code = FAN_REVERSE_MAP.get(fan_mode, 4)
         
-        # Используем параметры из последней команды
-        onoff = self._last_command.get("onoff", 1)
+        # Сохраняем скорость в кэш
+        self._last_command["fan"] = fan_code
+        
+        # Обновляем локальный кэш
+        self._current_data["fan_code"] = fan_code
+        self._current_data["fan"] = fan_mode
+        
+        # Отправляем команду на устройство ТОЛЬКО если оно включено
+        if self._last_command.get("onoff", 0) == 1:
+            # Используем параметры из последней команды
+            mode_code = self._last_command.get("mode", MODE_COOL)
+            current_temp = self._last_command.get("temp", 24)
+            
+            success = await self._client.set_idu(
+                sys=self._sys,
+                addr=self._addr,
+                onoff=1,
+                mode=mode_code,
+                fan=fan_code,
+                temp=int(current_temp)
+            )
+            
+            if success:
+                _LOGGER.debug("Fan mode set successfully for %s to %s", self._uid, fan_mode)
+                await self.coordinator.async_request_refresh()
+            else:
+                _LOGGER.error("Failed to set fan mode for %s", self._uid)
+        else:
+            # Устройство выключено - только сохраняем настройки
+            _LOGGER.debug("Device %s is off, fan mode %s saved for next start", 
+                         self._uid, fan_mode)
+            self.async_write_ha_state()
+    
+    async def async_turn_on(self):
+        """Включить кондиционер с сохраненными настройками."""
+        # Используем сохраненные настройки
         mode_code = self._last_command.get("mode", MODE_COOL)
+        fan_code = self._last_command.get("fan", 4)
         current_temp = self._last_command.get("temp", 24)
         
         success = await self._client.set_idu(
             sys=self._sys,
             addr=self._addr,
-            onoff=onoff,
+            onoff=1,
             mode=mode_code,
             fan=fan_code,
             temp=int(current_temp)
         )
         
         if success:
-            self._last_command["fan"] = fan_code
-            self._current_data["fan_code"] = fan_code
-            self._current_data["fan"] = fan_mode
-            if onoff == 0:  # Если устройство было выключено, включаем его
-                self._current_data["power"] = 1
-                self._last_command["onoff"] = 1
-            _LOGGER.debug("Fan mode set successfully for %s to %s", self._uid, fan_mode)
-            await self.coordinator.async_request_refresh()
-        else:
-            _LOGGER.error("Failed to set fan mode for %s", self._uid)
-    
-    async def async_turn_on(self):
-        """Включить кондиционер."""
-        success = await self._client.set_idu(
-            sys=self._sys,
-            addr=self._addr,
-            onoff=1,
-            mode=self._last_command.get("mode", MODE_COOL),
-            fan=self._last_command.get("fan", 4),
-            temp=self._last_command.get("temp", 24)
-        )
-        
-        if success:
             self._last_command["onoff"] = 1
             self._current_data["power"] = 1
-            _LOGGER.debug("Device %s turned on", self._uid)
+            _LOGGER.debug("Device %s turned on with saved settings", self._uid)
             await self.coordinator.async_request_refresh()
     
     async def async_turn_off(self):
-        """Выключить кондиционер."""
+        """Выключить кондиционер, сохраняя настройки."""
         success = await self._client.set_idu(
             sys=self._sys,
             addr=self._addr,
             onoff=0,
-            mode=MODE_COOL,
-            fan=4,
-            temp=24
+            mode=self._last_command.get("mode", MODE_COOL),
+            fan=self._last_command.get("fan", 4),
+            temp=self._last_command.get("temp", 24)  # Сохраняем последнюю температуру
         )
         
         if success:
             self._last_command["onoff"] = 0
             self._current_data["power"] = 0
-            _LOGGER.debug("Device %s turned off", self._uid)
+            _LOGGER.debug("Device %s turned off with saved settings", self._uid)
             await self.coordinator.async_request_refresh()
 
 async def async_setup_entry(hass, entry, async_add_entities):
