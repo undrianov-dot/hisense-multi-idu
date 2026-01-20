@@ -1,7 +1,9 @@
 {
   "domain": "hisense_multi_idu",
   "name": "Hisense Multi-IDU Air Conditioner",  
-  "version": "1.0.0",
+  "version": "1.0.1",
+  "icon": "https://brands.home-assistant.io/hisense_multi_idu/icon.png",
+  "icon": "https://brands.home-assistant.io/hisense_multi_idu/dark_logo.png",
   "documentation": "https://github.com/undrianov-dot/hisense-multi-idu",
   "issue_tracker": "https://github.com/undrianov-dot/hisense-multi-idu/issues",
   "codeowners": ["@undrianov-dot"],
@@ -11,4 +13,5 @@
   "integration_type": "hub",
   "quality_scale": "silver"
 }
+
 
