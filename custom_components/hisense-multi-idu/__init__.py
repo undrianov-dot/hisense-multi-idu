@@ -156,8 +156,8 @@ class HisenseClient:
                         "fan_code": raw_data[30] if len(raw_data) > 30 else 4,
                         "set_temp": raw_data[31] if len(raw_data) > 31 else 24,
                         "error_code": raw_data[35] if len(raw_data) > 35 else 0,
-                        "room_temp": raw_data[38] if len(raw_data) > 38 else None,  # Индекс 38
-                        "pipe_temp": raw_data[39] if len(raw_data) > 39 else None,  # Индекс 39
+                        "room_temp": raw_data[39] if len(raw_data) > 39 else None,  # Индекс 39
+                        "pipe_temp": raw_data[38] if len(raw_data) > 38 else None,  # Индекс 38
                         
                         # Регистры блокировки
                         "model1": raw_data[72] if len(raw_data) > 72 else 0,
@@ -359,3 +359,4 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id, None)
     return unload_ok
+
