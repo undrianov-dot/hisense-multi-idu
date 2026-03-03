@@ -1,4 +1,5 @@
 """Climate platform for Hisense Multi-IDU."""
+import asyncio
 import logging
 from homeassistant.components.climate import ClimateEntity, ClimateEntityFeature, HVACMode
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
@@ -80,6 +81,7 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         # Кэш текущих данных
         self._current_data = {}
         # Сохраненные настройки (для использования при включении)
+        self._refresh_task: asyncio.Task | None = None
         self._saved_settings = {
             "temp": 24,
             "mode": MODE_COOL,
@@ -106,6 +108,29 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         else:
             self._current_data = {}
     
+    async def async_will_remove_from_hass(self):
+        """Cancel pending debounced refresh task on entity removal."""
+        if self._refresh_task and not self._refresh_task.done():
+            self._refresh_task.cancel()
+            try:
+                await self._refresh_task
+            except asyncio.CancelledError:
+                pass
+
+    async def _request_refresh_debounced(self, delay: float = 0.35):
+        """Coalesce sequential service calls into one coordinator refresh."""
+        if self._refresh_task and not self._refresh_task.done():
+            self._refresh_task.cancel()
+
+        async def _delayed_refresh():
+            try:
+                await asyncio.sleep(delay)
+                await self.coordinator.async_request_refresh()
+            except asyncio.CancelledError:
+                return
+
+        self._refresh_task = asyncio.create_task(_delayed_refresh())
+
     @property
     def available(self):
         """Доступно ли устройство."""
@@ -208,7 +233,7 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
             if success:
                 _LOGGER.debug("Temperature set successfully for %s to %s°C", self._uid, temperature)
                 # Запрашиваем обновление от координатора
-                await self.coordinator.async_request_refresh()
+                await self._request_refresh_debounced()
             else:
                 _LOGGER.error("Failed to set temperature for %s", self._uid)
         else:
@@ -232,7 +257,7 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
             )
             if success:
                 _LOGGER.debug("Device %s turned off with saved settings", self._uid)
-                await self.coordinator.async_request_refresh()
+                await self._request_refresh_debounced()
         else:
             # Включить устройство с нужным режимом
             
@@ -259,7 +284,7 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
             if success:
                 _LOGGER.debug("Device %s turned on with mode %s, temp %s", 
                             self._uid, hvac_mode, current_temp)
-                await self.coordinator.async_request_refresh()
+                await self._request_refresh_debounced()
             else:
                 _LOGGER.error("Failed to set HVAC mode for %s", self._uid)
     
@@ -292,7 +317,7 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
             
             if success:
                 _LOGGER.debug("Fan mode set successfully for %s to %s", self._uid, fan_mode)
-                await self.coordinator.async_request_refresh()
+                await self._request_refresh_debounced()
             else:
                 _LOGGER.error("Failed to set fan mode for %s", self._uid)
         else:
@@ -319,7 +344,7 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         
         if success:
             _LOGGER.debug("Device %s turned on with saved settings", self._uid)
-            await self.coordinator.async_request_refresh()
+            await self._request_refresh_debounced()
     
     async def async_turn_off(self):
         """Выключить кондиционер, сохраняя настройки."""
@@ -334,7 +359,7 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         
         if success:
             _LOGGER.debug("Device %s turned off with saved settings", self._uid)
-            await self.coordinator.async_request_refresh()
+            await self._request_refresh_debounced()
 
 async def async_setup_entry(hass, entry, async_add_entities):
     """Set up climate entities."""

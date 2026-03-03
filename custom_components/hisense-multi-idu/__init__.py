@@ -120,17 +120,18 @@ class HisenseClient:
                     _LOGGER.warning("No IDU data in response")
                     return self._last_idu_data
                 
+                topo_index = {
+                    (topo_item.get("sysAdr"), str(topo_item.get("address"))): topo_item
+                    for topo_item in idu_list
+                }
+
                 for item in idu_dats:
                     sys = item.get("sys")
                     addr = item.get("addr")
                     key = f"S{sys}_{addr}"
                     
                     # Находим соответствующую запись в топологии
-                    topo_info = next(
-                        (t for t in idu_list 
-                         if t.get("sysAdr") == sys and str(t.get("address")) == str(addr)),
-                        {}
-                    )
+                    topo_info = topo_index.get((sys, str(addr)), {})
                     
                     # Парсим данные
                     raw_data = item.get("data", [])
@@ -214,7 +215,7 @@ class HisenseClient:
     async def get_power_data(self):
         """Получает данные электросчетчика через отдельную функцию."""
         try:
-            power = await fetch_power_data(self._host)
+            power = await fetch_power_data(self._session, self._host)
             return power
         except Exception as e:
             _LOGGER.error("Failed to get power data: %s", e)
