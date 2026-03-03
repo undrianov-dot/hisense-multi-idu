@@ -1,5 +1,6 @@
 """Sensor platform for Hisense Multi-IDU (energy meter like in YAML)."""
 import logging
+import time
 from homeassistant.components.sensor import (
     SensorEntity, 
     SensorDeviceClass, 
@@ -166,51 +167,41 @@ class HisensePowerSensor(CoordinatorEntity, SensorEntity):
         """Return True if sensor data is available."""
         return bool(self.coordinator.last_update_success and self.coordinator.data is not None)
 
+    def _handle_coordinator_update(self) -> None:
+        """Update calculated power once per coordinator refresh."""
+        data = self.coordinator.data
+
+        if data is not None:
+            try:
+                current_energy = float(data)
+                current_time = time.time()
+
+                if self._last_energy is not None and self._last_update_time is not None:
+                    energy_diff_wh = current_energy - self._last_energy
+                    time_diff_hours = (current_time - self._last_update_time) / 3600.0
+
+                    if time_diff_hours > 0:
+                        power_kw = (energy_diff_wh / time_diff_hours) / 1000.0
+                        if self._current_power == 0:
+                            self._current_power = power_kw
+                        else:
+                            self._current_power = 0.7 * self._current_power + 0.3 * power_kw
+
+                self._last_energy = current_energy
+                self._last_update_time = current_time
+            except (ValueError, TypeError):
+                pass
+
+        super()._handle_coordinator_update()
+
     @property
     def native_value(self):
         """Return the current power in kW."""
-        import time
-        
-        data = self.coordinator.data
-        
-        if data is None:
-            return round(self._current_power, 3)
-        
-        try:
-            current_energy = float(data)  # текущая энергия в ватт-часах
-            current_time = time.time()
-            
-            if self._last_energy is not None and self._last_update_time is not None:
-                # Вычисляем разницу энергии в ватт-часах
-                energy_diff_wh = current_energy - self._last_energy
-                
-                # Вычисляем разницу времени в часах
-                time_diff_hours = (current_time - self._last_update_time) / 3600.0
-                
-                if time_diff_hours > 0:
-                    # Мощность (кВт) = разница энергии (Вт·ч) / разница времени (ч) / 1000
-                    power_kw = (energy_diff_wh / time_diff_hours) / 1000.0
-                    
-                    # Сглаживаем значение (можно убрать, если не нужно)
-                    if self._current_power == 0:
-                        self._current_power = power_kw
-                    else:
-                        self._current_power = 0.7 * self._current_power + 0.3 * power_kw
-            
-            # Обновляем предыдущие значения
-            self._last_energy = current_energy
-            self._last_update_time = current_time
-            
-            return round(self._current_power, 3)
-            
-        except (ValueError, TypeError):
-            return round(self._current_power, 3)
+        return round(self._current_power, 3)
 
     @property
     def extra_state_attributes(self):
         """Return additional attributes."""
-        import time
-        
         data = self.coordinator.data
         attrs = {
             "data_source": "Hisense Multi-IDU Power Calculation",
