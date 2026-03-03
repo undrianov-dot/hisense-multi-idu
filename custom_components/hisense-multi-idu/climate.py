@@ -91,6 +91,7 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
             "mode": MODE_COOL,
             "fan": 4
         }
+        self._pending_off_temperature = False
     
     def _update_data(self):
         """Обновляет данные из координатора."""
@@ -103,11 +104,15 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         if unit_data:
             self._current_data = unit_data
             # Сохраняем последние настройки для использования при включении.
-            # Температура в standby может отличаться от дефолтной, поэтому
-            # обновляем её независимо от состояния питания.
-            self._saved_settings["temp"] = unit_data.get(
-                "set_temp", self._saved_settings.get("temp", 24)
-            )
+            # Если температуру меняли локально при выключенном блоке,
+            # не перезаписываем её «старыми» данными с устройства до включения.
+            power = unit_data.get("power", 0)
+            if power == 1 or not self._pending_off_temperature:
+                self._saved_settings["temp"] = unit_data.get(
+                    "set_temp", self._saved_settings.get("temp", 24)
+                )
+                if power == 1:
+                    self._pending_off_temperature = False
 
             if "mode_code" in unit_data:
                 self._saved_settings["mode"] = unit_data.get("mode_code", MODE_COOL)
@@ -230,6 +235,7 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         
         # Отправляем команду на устройство ТОЛЬКО если оно включено
         if self._current_data.get("power", 0) == 1:
+            self._pending_off_temperature = False
             success = await self._client.set_idu(
                 sys=self._sys,
                 addr=self._addr,
@@ -246,6 +252,7 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
             else:
                 _LOGGER.error("Failed to set temperature for %s", self._uid)
         else:
+            self._pending_off_temperature = True
             # Устройство выключено - только сохраняем настройки
             _LOGGER.debug("Device %s is off, temperature %s°C saved for next start", 
                          self._uid, temperature)
