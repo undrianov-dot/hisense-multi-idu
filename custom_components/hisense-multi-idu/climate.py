@@ -102,13 +102,18 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         unit_data = data.get(self._uid, {})
         if unit_data:
             self._current_data = unit_data
-            # Сохраняем текущие настройки для использования при включении
-            if unit_data.get("power", 0) == 1:  # Только если устройство включено
-                self._saved_settings = {
-                    "temp": unit_data.get("set_temp", 24),
-                    "mode": unit_data.get("mode_code", MODE_COOL),
-                    "fan": unit_data.get("fan_code", 4)
-                }
+            # Сохраняем последние настройки для использования при включении.
+            # Температура в standby может отличаться от дефолтной, поэтому
+            # обновляем её независимо от состояния питания.
+            self._saved_settings["temp"] = unit_data.get(
+                "set_temp", self._saved_settings.get("temp", 24)
+            )
+
+            if "mode_code" in unit_data:
+                self._saved_settings["mode"] = unit_data.get("mode_code", MODE_COOL)
+
+            if "fan_code" in unit_data:
+                self._saved_settings["fan"] = unit_data.get("fan_code", 4)
         else:
             self._current_data = {}
     
@@ -144,7 +149,7 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
     @property
     def target_temperature(self):
         self._update_data()
-        if self._current_data:
+        if self._current_data and self._current_data.get("power", 0) == 1:
             return self._current_data.get("set_temp", 24)
         return self._saved_settings.get("temp", 24)
     
