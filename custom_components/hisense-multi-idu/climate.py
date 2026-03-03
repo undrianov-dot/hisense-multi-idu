@@ -13,6 +13,10 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Небольшая дополнительная задержка перед опросом состояния после команды,
+# чтобы устройство успело применить изменения и интерфейс не "отпрыгивал".
+POST_COMMAND_REFRESH_DELAY = 1.5
+
 # Маппинг режимов устройства на HVACMode (без AUTO)
 DEVICE_TO_HVAC = {
     "cool": HVACMode.COOL,
@@ -117,7 +121,7 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
             except asyncio.CancelledError:
                 pass
 
-    async def _request_refresh_debounced(self, delay: float = 0.35):
+    async def _request_refresh_debounced(self, delay: float = POST_COMMAND_REFRESH_DELAY):
         """Coalesce sequential service calls into one coordinator refresh."""
         if self._refresh_task and not self._refresh_task.done():
             self._refresh_task.cancel()
