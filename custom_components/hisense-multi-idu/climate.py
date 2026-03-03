@@ -275,14 +275,27 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
                 _LOGGER.debug("Device %s turned off with saved settings", self._uid)
                 await self._request_refresh_debounced()
         else:
-            # Включить устройство с нужным режимом
-            
             # Преобразуем HVACMode в режим устройства
             device_mode = HVAC_TO_DEVICE.get(hvac_mode, "cool")
             mode_code = MODE_REVERSE_MAP.get(device_mode, MODE_COOL)
             
             # Сохраняем режим
             self._saved_settings["mode"] = mode_code
+
+            # Обновляем локальный кэш для корректного отображения
+            self._current_data["mode_code"] = mode_code
+            self._current_data["mode"] = device_mode
+
+            # Если устройство выключено, только сохраняем режим.
+            # Включение/выключение должно быть независимым от изменения режима.
+            if self._current_data.get("power", 0) != 1:
+                _LOGGER.debug(
+                    "Device %s is off, hvac mode %s saved for next start",
+                    self._uid,
+                    hvac_mode,
+                )
+                self.async_write_ha_state()
+                return
             
             # Используем сохраненную температуру
             current_temp = self._saved_settings.get("temp", 24)
