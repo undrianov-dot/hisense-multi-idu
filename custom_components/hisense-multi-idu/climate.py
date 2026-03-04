@@ -92,6 +92,18 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
             "fan": 4
         }
         self._pending_off_temperature = False
+
+    def _get_effective_mode_code(self):
+        """Return the mode code that should be preserved across commands."""
+        return self._current_data.get("mode_code", self._saved_settings.get("mode", MODE_COOL))
+
+    def _get_effective_fan_code(self):
+        """Return the fan code that should be preserved across commands."""
+        return self._current_data.get("fan_code", self._saved_settings.get("fan", 4))
+
+    def _get_effective_temperature(self):
+        """Return the temperature that should be preserved across commands."""
+        return self._current_data.get("set_temp", self._saved_settings.get("temp", 24))
     
     def _update_data(self):
         """Обновляет данные из координатора."""
@@ -236,12 +248,15 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         # Отправляем команду на устройство ТОЛЬКО если оно включено
         if self._current_data.get("power", 0) == 1:
             self._pending_off_temperature = False
+            mode_code = self._get_effective_mode_code()
+            fan_code = self._get_effective_fan_code()
+
             success = await self._client.set_idu(
                 sys=self._sys,
                 addr=self._addr,
                 onoff=1,
-                mode=self._current_data.get("mode_code", MODE_COOL),
-                fan=self._current_data.get("fan_code", 4),
+                mode=mode_code,
+                fan=fan_code,
                 temp=int(temperature)
             )
             
@@ -298,8 +313,8 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
                 return
             
             # Используем сохраненную температуру
-            current_temp = self._saved_settings.get("temp", 24)
-            fan_code = self._saved_settings.get("fan", 4)
+            current_temp = self._get_effective_temperature()
+            fan_code = self._get_effective_fan_code()
             
             success = await self._client.set_idu(
                 sys=self._sys,
@@ -332,8 +347,8 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         # Отправляем команду на устройство ТОЛЬКО если оно включено
         if self._current_data.get("power", 0) == 1:
             # Используем параметры из текущих данных
-            mode_code = self._current_data.get("mode_code", MODE_COOL)
-            current_temp = self._current_data.get("set_temp", 24)
+            mode_code = self._get_effective_mode_code()
+            current_temp = self._get_effective_temperature()
             
             success = await self._client.set_idu(
                 sys=self._sys,
@@ -357,10 +372,11 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
     
     async def async_turn_on(self):
         """Включить кондиционер с сохраненными настройками."""
-        # Используем сохраненные настройки
-        mode_code = self._saved_settings.get("mode", MODE_COOL)
-        fan_code = self._saved_settings.get("fan", 4)
-        current_temp = self._saved_settings.get("temp", 24)
+        # Используем текущие/сохраненные настройки без сброса на значения по умолчанию
+        self._update_data()
+        mode_code = self._get_effective_mode_code()
+        fan_code = self._get_effective_fan_code()
+        current_temp = self._get_effective_temperature()
         
         success = await self._client.set_idu(
             sys=self._sys,
@@ -377,13 +393,14 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
     
     async def async_turn_off(self):
         """Выключить кондиционер, сохраняя настройки."""
+        self._update_data()
         success = await self._client.set_idu(
             sys=self._sys,
             addr=self._addr,
             onoff=0,
-            mode=self._saved_settings.get("mode", MODE_COOL),
-            fan=self._saved_settings.get("fan", 4),
-            temp=self._saved_settings.get("temp", 24)  # Сохраняем последнюю температуру
+            mode=self._get_effective_mode_code(),
+            fan=self._get_effective_fan_code(),
+            temp=self._get_effective_temperature(),
         )
         
         if success:
