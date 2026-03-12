@@ -1,6 +1,7 @@
 """Climate platform for Hisense Multi-IDU."""
 import asyncio
 import logging
+import time
 from homeassistant.components.climate import ClimateEntity, ClimateEntityFeature, HVACMode
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -15,7 +16,7 @@ _LOGGER = logging.getLogger(__name__)
 
 # Небольшая дополнительная задержка перед опросом состояния после команды,
 # чтобы устройство успело применить изменения и интерфейс не "отпрыгивал".
-POST_COMMAND_REFRESH_DELAY = 1.5
+POST_COMMAND_REFRESH_DELAY = 10.0
 
 # Маппинг режимов устройства на HVACMode (без AUTO)
 DEVICE_TO_HVAC = {
@@ -92,6 +93,18 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
             "fan": 4
         }
         self._pending_off_temperature = False
+        self._optimistic_overrides: dict[str, object] = {}
+        self._optimistic_until: float = 0.0
+
+    def _apply_optimistic_update(self, **changes):
+        """Apply immediate local state changes until the delayed refresh arrives."""
+        if not changes:
+            return
+
+        self._optimistic_overrides.update(changes)
+        self._optimistic_until = time.monotonic() + POST_COMMAND_REFRESH_DELAY
+        self._current_data.update(changes)
+        self.async_write_ha_state()
 
     def _get_effective_mode_code(self):
         """Return the mode code that should be preserved across commands."""
@@ -110,11 +123,20 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         data = self.coordinator.data
         if not data:
             self._current_data = {}
+            self._optimistic_overrides = {}
+            self._optimistic_until = 0.0
             return
         
         unit_data = data.get(self._uid, {})
         if unit_data:
-            self._current_data = unit_data
+            self._current_data = unit_data.copy()
+
+            if self._optimistic_overrides:
+                if time.monotonic() < self._optimistic_until:
+                    self._current_data.update(self._optimistic_overrides)
+                else:
+                    self._optimistic_overrides = {}
+                    self._optimistic_until = 0.0
             # Сохраняем последние настройки для использования при включении.
             # Если температуру меняли локально при выключенном блоке,
             # не перезаписываем её «старыми» данными с устройства до включения.
@@ -243,7 +265,7 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         self._saved_settings["temp"] = int(temperature)
         
         # Обновляем локальный кэш для отображения в интерфейсе
-        self._current_data["set_temp"] = int(temperature)
+        self._apply_optimistic_update(set_temp=int(temperature))
         
         # Отправляем команду на устройство ТОЛЬКО если оно включено
         if self._current_data.get("power", 0) == 1:
@@ -288,6 +310,7 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
             )
             if success:
                 _LOGGER.debug("Device %s turned off with saved settings", self._uid)
+                self._apply_optimistic_update(power=0)
                 await self._request_refresh_debounced()
         else:
             # Преобразуем HVACMode в режим устройства
@@ -298,8 +321,7 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
             self._saved_settings["mode"] = mode_code
 
             # Обновляем локальный кэш для корректного отображения
-            self._current_data["mode_code"] = mode_code
-            self._current_data["mode"] = device_mode
+            self._apply_optimistic_update(mode_code=mode_code, mode=device_mode)
 
             # Если устройство выключено, только сохраняем режим.
             # Включение/выключение должно быть независимым от изменения режима.
@@ -328,6 +350,7 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
             if success:
                 _LOGGER.debug("Device %s turned on with mode %s, temp %s", 
                             self._uid, hvac_mode, current_temp)
+                self._apply_optimistic_update(power=1)
                 await self._request_refresh_debounced()
             else:
                 _LOGGER.error("Failed to set HVAC mode for %s", self._uid)
@@ -341,8 +364,7 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         self._saved_settings["fan"] = fan_code
         
         # Обновляем локальный кэш
-        self._current_data["fan_code"] = fan_code
-        self._current_data["fan"] = fan_mode
+        self._apply_optimistic_update(fan_code=fan_code, fan=fan_mode)
         
         # Отправляем команду на устройство ТОЛЬКО если оно включено
         if self._current_data.get("power", 0) == 1:
@@ -389,6 +411,14 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         
         if success:
             _LOGGER.debug("Device %s turned on with saved settings", self._uid)
+            self._apply_optimistic_update(
+                power=1,
+                mode_code=mode_code,
+                mode=MODE_MAP.get(mode_code, "cool"),
+                fan_code=fan_code,
+                fan=FAN_MAP.get(fan_code, "auto"),
+                set_temp=int(current_temp),
+            )
             await self._request_refresh_debounced()
     
     async def async_turn_off(self):
@@ -405,6 +435,7 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         
         if success:
             _LOGGER.debug("Device %s turned off with saved settings", self._uid)
+            self._apply_optimistic_update(power=0)
             await self._request_refresh_debounced()
 
 async def async_setup_entry(hass, entry, async_add_entities):
