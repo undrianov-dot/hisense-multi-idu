@@ -10,7 +10,7 @@ from homeassistant.components.cover import (
 )
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, DAMPER_MAP, DAMPER_REVERSE_MAP
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ _LOGGER = logging.getLogger(__name__)
 class HisenseDamperCover(CoordinatorEntity, CoverEntity):
     """Representation of a Hisense damper/louver cover."""
     
-    _attr_device_class = CoverDeviceClass.DAMPER
+    _attr_device_class = CoverDeviceClass.BLIND
     _attr_supported_features = (
         CoverEntityFeature.OPEN |
         CoverEntityFeature.CLOSE |
@@ -237,14 +237,11 @@ async def async_setup_entry(hass, entry, async_add_entities):
                 if suggested_area:
                     entity_device_info["suggested_area"] = suggested_area
                 
-                # Проверяем, поддерживает ли устройство управление жалюзи
-                damper_vertical = unit_data.get("damper_vertical", 0)
-                if damper_vertical > 0:  # Если есть данные о жалюзи
-                    entities.append(HisenseDamperCover(
-                        coordinator, client, uid, entity_device_info, 
-                        entity_name=original_name
-                    ))
-                    _LOGGER.debug("Created damper entity for %s", uid)
+                entities.append(HisenseDamperCover(
+                    coordinator, client, uid, entity_device_info,
+                    entity_name=original_name
+                ))
+                _LOGGER.debug("Created damper entity for %s", uid)
     
     if entities:
         async_add_entities(entities, update_before_add=True)
