@@ -8,44 +8,22 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-# Основной профиль команд (из пользовательских дампов): 8 фиксированных углов + auto.
+# Профиль команд по фактическим дампам Hidom:
+# angle_1 -> 0, auto -> 1, angle_2 -> 2, angle_3 -> 4.
 DAMPER_CODE_TO_OPTION = {
-    1: "angle_1",
+    0: "angle_1",
+    1: "auto",
     2: "angle_2",
-    3: "angle_3",
-    4: "angle_4",
-    5: "angle_5",
-    6: "angle_6",
-    7: "angle_7",
-    8: "angle_8",
-    9: "auto",
+    4: "angle_3",
 }
 
 OPTION_TO_DAMPER_CODE = {value: key for key, value in DAMPER_CODE_TO_OPTION.items()}
-
-# Обратная совместимость для старого профиля, который ранее использовался в интеграции.
-LEGACY_DAMPER_CODE_TO_OPTION = {
-    3: "angle_1",
-    4: "angle_2",
-    5: "angle_3",
-    6: "auto",
-}
 
 
 class HisenseLouverAngleSelect(CoordinatorEntity, SelectEntity):
     """Select entity for setting vertical louver angle."""
 
-    _attr_options = [
-        "angle_1",
-        "angle_2",
-        "angle_3",
-        "angle_4",
-        "angle_5",
-        "angle_6",
-        "angle_7",
-        "angle_8",
-        "auto",
-    ]
+    _attr_options = ["angle_1", "angle_2", "angle_3", "auto"]
 
     def __init__(self, coordinator, client, uid, device_info, entity_name=None):
         super().__init__(coordinator)
@@ -81,11 +59,8 @@ class HisenseLouverAngleSelect(CoordinatorEntity, SelectEntity):
         unit_data = data.get(self._uid, {})
         if unit_data:
             self._current_data = unit_data
-            damper_code = unit_data.get("damper_vertical", 9)
-            self._current_option = DAMPER_CODE_TO_OPTION.get(
-                damper_code,
-                LEGACY_DAMPER_CODE_TO_OPTION.get(damper_code, "auto"),
-            )
+            damper_code = unit_data.get("damper_vertical", 1)
+            self._current_option = DAMPER_CODE_TO_OPTION.get(damper_code, "auto")
 
     @property
     def available(self):

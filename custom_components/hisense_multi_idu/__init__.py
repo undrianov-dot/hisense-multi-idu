@@ -270,19 +270,62 @@ class HisenseClient:
             return False
 
     async def set_damper(self, sys: int, addr: int, command: int) -> bool:
-        """Устанавливает положение вертикальных жалюзи внутреннего блока."""
-        # Используем последние известные настройки, чтобы не сбрасывать режим/температуру
+        """Устанавливает положение вертикальных жалюзи по формату из Hidom дампов."""
+        # Используем последние известные настройки, чтобы не сбрасывать режим/температуру.
         idu_key = f"S{sys}_{addr}"
         cached = self._last_idu_data.get(idu_key, {})
-        return await self.set_idu(
-            sys=sys,
-            addr=addr,
-            onoff=cached.get("power", 1),
-            mode=cached.get("mode_code", 2),
-            fan=cached.get("fan_code", 4),
-            temp=cached.get("set_temp", 24),
-            damper=command,
-        )
+        onoff = cached.get("power", 1)
+        mode = cached.get("mode_code", 8)
+        fan = cached.get("fan_code", 4)
+        temp = cached.get("set_temp", 24)
+
+        cmd_list = [
+            {
+                "seq": 1,
+                "sys": sys,
+                "iduAddr": addr,
+                "regAddr": 78,
+                "regVal": [
+                    onoff,
+                    mode,
+                    fan,
+                    temp,
+                    65535,
+                    command,
+                    65535,
+                    0,
+                    65535,
+                    0,
+                ],
+            },
+            {
+                "seq": 2,
+                "sys": sys,
+                "iduAddr": addr,
+                "regAddr": 72,
+                "regVal": [2, 0, 0, 0, 0, 0],
+            },
+        ]
+
+        url = f"http://{self._host}/cgi/set_idu.shtml"
+        try:
+            async with self._session.post(
+                url,
+                json={"ip": self._host, "cmdList": cmd_list},
+                timeout=10,
+            ) as resp:
+                if resp.status != 200:
+                    _LOGGER.error("HTTP error when setting damper: %s", resp.status)
+                    return False
+
+                data = await resp.json(content_type=None)
+                success = data.get("status") == "success"
+                if not success:
+                    _LOGGER.error("Device returned error when setting damper: %s", data)
+                return success
+        except Exception as err:
+            _LOGGER.error("Failed to set damper: %s", err)
+            return False
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Hisense Multi-IDU from a config entry."""
