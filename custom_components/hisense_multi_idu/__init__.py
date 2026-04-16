@@ -18,6 +18,8 @@ from .const import (
 from .power_meter import fetch_power_data
 
 _LOGGER = logging.getLogger(__name__)
+
+# Управление жалюзи выполняется через `select` (платформа `cover` удалена).
 PLATFORMS = ["climate", "sensor", "select"]
 
 class HisenseClient:

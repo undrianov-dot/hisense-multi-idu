@@ -8,6 +8,7 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
+# Основной профиль команд (из пользовательских дампов): 8 фиксированных углов + auto.
 DAMPER_CODE_TO_OPTION = {
     1: "angle_1",
     2: "angle_2",
@@ -21,6 +22,14 @@ DAMPER_CODE_TO_OPTION = {
 }
 
 OPTION_TO_DAMPER_CODE = {value: key for key, value in DAMPER_CODE_TO_OPTION.items()}
+
+# Обратная совместимость для старого профиля, который ранее использовался в интеграции.
+LEGACY_DAMPER_CODE_TO_OPTION = {
+    3: "angle_1",
+    4: "angle_2",
+    5: "angle_3",
+    6: "auto",
+}
 
 
 class HisenseLouverAngleSelect(CoordinatorEntity, SelectEntity):
@@ -73,7 +82,10 @@ class HisenseLouverAngleSelect(CoordinatorEntity, SelectEntity):
         if unit_data:
             self._current_data = unit_data
             damper_code = unit_data.get("damper_vertical", 9)
-            self._current_option = DAMPER_CODE_TO_OPTION.get(damper_code, "auto")
+            self._current_option = DAMPER_CODE_TO_OPTION.get(
+                damper_code,
+                LEGACY_DAMPER_CODE_TO_OPTION.get(damper_code, "auto"),
+            )
 
     @property
     def available(self):
