@@ -8,7 +8,7 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-# Профиль команд по фактическим дампам Hidom:
+# Маппинг по фактическим дампам Hidom:
 # angle_1 -> 0, auto -> 1, angle_2 -> 2, angle_3 -> 4.
 DAMPER_CODE_TO_OPTION = {
     0: "angle_1",
