@@ -18,7 +18,7 @@ from .const import (
 from .power_meter import fetch_power_data
 
 _LOGGER = logging.getLogger(__name__)
-PLATFORMS = ["climate", "sensor", "cover", "select"]
+PLATFORMS = ["climate", "sensor"]
 
 class HisenseClient:
     """Клиент для взаимодействия с устройством Hisense Multi-IDU."""
@@ -239,7 +239,7 @@ class HisenseClient:
                     kwargs.get("mode", 2),       # Режим
                     kwargs.get("fan", 4),        # Скорость вентилятора
                     kwargs.get("temp", 24),      # Температура
-                    kwargs.get("damper", 0),     # Вертикальные жалюзи
+                    self._last_idu_data.get(f"S{sys}_{addr}", {}).get("damper_vertical", 0),
                 ]
             })
             
@@ -267,20 +267,6 @@ class HisenseClient:
             _LOGGER.error("Failed to set IDU: %s", e)
             return False
 
-    async def set_damper(self, sys: int, addr: int, command: int) -> bool:
-        """Устанавливает положение вертикальных жалюзи внутреннего блока."""
-        # Используем последние известные настройки, чтобы не сбрасывать режим/температуру
-        idu_key = f"S{sys}_{addr}"
-        cached = self._last_idu_data.get(idu_key, {})
-        return await self.set_idu(
-            sys=sys,
-            addr=addr,
-            onoff=cached.get("power", 1),
-            mode=cached.get("mode_code", 2),
-            fan=cached.get("fan_code", 4),
-            temp=cached.get("set_temp", 24),
-            damper=command,
-        )
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Hisense Multi-IDU from a config entry."""
