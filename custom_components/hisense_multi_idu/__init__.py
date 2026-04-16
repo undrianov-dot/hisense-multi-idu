@@ -18,8 +18,8 @@ from .const import (
 from .power_meter import fetch_power_data
 
 _LOGGER = logging.getLogger(__name__)
-# Конфликт с main решён в пользу select: cover-платформа не подключается.
-PLATFORMS = ["climate", "sensor", "select"]
+# Для обратной совместимости поддерживаем и cover, и select.
+PLATFORMS = ["climate", "sensor", "cover", "select"]
 
 class HisenseClient:
     """Клиент для взаимодействия с устройством Hisense Multi-IDU."""
