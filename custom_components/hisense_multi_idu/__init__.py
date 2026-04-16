@@ -11,7 +11,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .const import (
     DOMAIN, DEFAULT_SCAN_INTERVAL_CLIMATE, DEFAULT_SCAN_INTERVAL_SENSOR,
-    MODE_MAP, FAN_MAP
+    MODE_MAP, FAN_MAP, LOUVER_MAP
 )
 
 # Импортируем новый модуль
@@ -185,6 +185,11 @@ class HisenseClient:
                             result[key]["fan"] = "high"
                         else:
                             result[key]["fan"] = "medium"
+
+                    result[key]["louver_code"] = result[key]["damper_vertical"]
+                    result[key]["louver"] = LOUVER_MAP.get(
+                        result[key]["louver_code"], "auto"
+                    )
                     
                     # Определяем статус
                     error = result[key]["error_code"]
@@ -239,7 +244,15 @@ class HisenseClient:
                     kwargs.get("mode", 2),       # Режим
                     kwargs.get("fan", 4),        # Скорость вентилятора
                     kwargs.get("temp", 24),      # Температура
-                    self._last_idu_data.get(f"S{sys}_{addr}", {}).get("damper_vertical", 0),
+                    65535,                       # Резерв
+                    kwargs.get(
+                        "louver",
+                        self._last_idu_data.get(f"S{sys}_{addr}", {}).get("damper_vertical", 1),
+                    ),                           # Вертикальная жалюзи
+                    65535,                       # Резерв
+                    0,                           # Горизонтальная жалюзи (не используется)
+                    65535,                       # Резерв
+                    0,                           # Резерв
                 ]
             })
             
@@ -256,9 +269,9 @@ class HisenseClient:
                 data = await resp.json(content_type=None)
                 success = data.get("status") == "success"
                 if success:
-                    _LOGGER.debug("Successfully set IDU S%s_%s: onoff=%s, mode=%s, fan=%s, temp=%s", 
+                    _LOGGER.debug("Successfully set IDU S%s_%s: onoff=%s, mode=%s, fan=%s, temp=%s, louver=%s", 
                                 sys, addr, kwargs.get("onoff"), kwargs.get("mode"), 
-                                kwargs.get("fan"), kwargs.get("temp"))
+                                kwargs.get("fan"), kwargs.get("temp"), kwargs.get("louver"))
                 else:
                     _LOGGER.error("Device returned error when setting IDU: %s", data)
                 return success
@@ -363,4 +376,3 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id, None)
     return unload_ok
-
