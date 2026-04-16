@@ -62,6 +62,30 @@ FAN_MAP = {
 
 FAN_REVERSE_MAP = {v: k for k, v in FAN_MAP.items()}
 
+# Коды вертикальной жалюзи (louver / swing)
+LOUVER_ANGLE_1 = 0
+LOUVER_AUTO = 1
+LOUVER_ANGLE_2 = 2
+LOUVER_ANGLE_3 = 4
+LOUVER_ANGLE_4 = 8
+LOUVER_ANGLE_5 = 16
+LOUVER_ANGLE_6 = 32
+LOUVER_ANGLE_7 = 64
+LOUVER_ANGLE_8 = 128
+
+LOUVER_MAP = {
+    LOUVER_AUTO: "auto",
+    LOUVER_ANGLE_1: "angle_1",
+    LOUVER_ANGLE_2: "angle_2",
+    LOUVER_ANGLE_3: "angle_3",
+    LOUVER_ANGLE_4: "angle_4",
+    LOUVER_ANGLE_5: "angle_5",
+    LOUVER_ANGLE_6: "angle_6",
+    LOUVER_ANGLE_7: "angle_7",
+    LOUVER_ANGLE_8: "angle_8",
+}
+
+LOUVER_REVERSE_MAP = {v: k for k, v in LOUVER_MAP.items()}
 
 
 

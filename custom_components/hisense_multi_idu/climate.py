@@ -9,6 +9,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import (
     DOMAIN, MODE_MAP, MODE_REVERSE_MAP, 
     FAN_MAP, FAN_REVERSE_MAP,
+    LOUVER_MAP, LOUVER_REVERSE_MAP,
     MODE_COOL, MODE_HEAT, MODE_DRY, MODE_FAN_ONLY
 )
 
@@ -41,6 +42,17 @@ HVAC_TO_DEVICE = {
 
 # Доступные скорости вентилятора в Home Assistant (только основные)
 HA_FAN_MODES = ["auto", "low", "medium", "high"]
+HA_SWING_MODES = [
+    "auto",
+    "angle_1",
+    "angle_2",
+    "angle_3",
+    "angle_4",
+    "angle_5",
+    "angle_6",
+    "angle_7",
+    "angle_8",
+]
 
 class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
     """Representation of a Hisense indoor unit."""
@@ -49,12 +61,14 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
     _attr_supported_features = (
         ClimateEntityFeature.TARGET_TEMPERATURE |
         ClimateEntityFeature.FAN_MODE |
+        ClimateEntityFeature.SWING_MODE |
         ClimateEntityFeature.TURN_OFF |
         ClimateEntityFeature.TURN_ON
     )
     # Убрали HVACMode.AUTO
     _attr_hvac_modes = [HVACMode.OFF, HVACMode.COOL, HVACMode.HEAT, HVACMode.DRY, HVACMode.FAN_ONLY]
     _attr_fan_modes = HA_FAN_MODES
+    _attr_swing_modes = HA_SWING_MODES
     _attr_min_temp = 16
     _attr_max_temp = 30
     _attr_target_temperature_step = 1
@@ -90,7 +104,8 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         self._saved_settings = {
             "temp": 24,
             "mode": MODE_COOL,
-            "fan": 4
+            "fan": 4,
+            "louver": 1,
         }
         self._pending_off_temperature = False
         self._optimistic_overrides: dict[str, object] = {}
@@ -117,6 +132,10 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
     def _get_effective_temperature(self):
         """Return the temperature that should be preserved across commands."""
         return self._current_data.get("set_temp", self._saved_settings.get("temp", 24))
+
+    def _get_effective_louver_code(self):
+        """Return the louver code that should be preserved across commands."""
+        return self._current_data.get("louver_code", self._saved_settings.get("louver", 1))
     
     def _update_data(self):
         """Обновляет данные из координатора."""
@@ -153,6 +172,8 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
 
             if "fan_code" in unit_data:
                 self._saved_settings["fan"] = unit_data.get("fan_code", 4)
+            if "louver_code" in unit_data:
+                self._saved_settings["louver"] = unit_data.get("louver_code", 1)
         else:
             self._current_data = {}
     
@@ -251,9 +272,19 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
                 "saved_temp": self._saved_settings.get("temp"),
                 "saved_mode": self._saved_settings.get("mode"),
                 "saved_fan": self._saved_settings.get("fan"),
+                "saved_louver": self._saved_settings.get("louver"),
             })
         
         return attrs
+
+    @property
+    def swing_mode(self):
+        self._update_data()
+        if self._current_data:
+            louver = self._current_data.get("louver", "auto")
+            if louver in HA_SWING_MODES:
+                return louver
+        return "auto"
     
     async def async_set_temperature(self, **kwargs):
         """Установить целевую температуру."""
@@ -279,7 +310,8 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
                 onoff=1,
                 mode=mode_code,
                 fan=fan_code,
-                temp=int(temperature)
+                temp=int(temperature),
+                louver=self._get_effective_louver_code(),
             )
             
             if success:
@@ -306,7 +338,8 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
                 onoff=0,
                 mode=self._saved_settings.get("mode", MODE_COOL),
                 fan=self._saved_settings.get("fan", 4),
-                temp=self._saved_settings.get("temp", 24)  # Сохраняем последнюю температуру
+                temp=self._saved_settings.get("temp", 24),  # Сохраняем последнюю температуру
+                louver=self._saved_settings.get("louver", 1),
             )
             if success:
                 _LOGGER.debug("Device %s turned off with saved settings", self._uid)
@@ -344,7 +377,8 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
                 onoff=1,
                 mode=mode_code,
                 fan=fan_code,
-                temp=int(current_temp)
+                temp=int(current_temp),
+                louver=self._get_effective_louver_code(),
             )
             
             if success:
@@ -378,7 +412,8 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
                 onoff=1,
                 mode=mode_code,
                 fan=fan_code,
-                temp=int(current_temp)
+                temp=int(current_temp),
+                louver=self._get_effective_louver_code(),
             )
             
             if success:
@@ -390,6 +425,39 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
             # Устройство выключено - только сохраняем настройки
             _LOGGER.debug("Device %s is off, fan mode %s saved for next start", 
                          self._uid, fan_mode)
+            self.async_write_ha_state()
+
+    async def async_set_swing_mode(self, swing_mode):
+        """Установить положение вертикальной жалюзи."""
+        louver_code = LOUVER_REVERSE_MAP.get(swing_mode)
+        if louver_code is None:
+            _LOGGER.warning("Unsupported swing mode %s for %s", swing_mode, self._uid)
+            return
+
+        self._saved_settings["louver"] = louver_code
+        self._apply_optimistic_update(louver_code=louver_code, louver=swing_mode)
+
+        if self._current_data.get("power", 0) == 1:
+            mode_code = self._get_effective_mode_code()
+            fan_code = self._get_effective_fan_code()
+            current_temp = self._get_effective_temperature()
+            success = await self._client.set_idu(
+                sys=self._sys,
+                addr=self._addr,
+                onoff=1,
+                mode=mode_code,
+                fan=fan_code,
+                temp=int(current_temp),
+                louver=louver_code,
+            )
+
+            if success:
+                _LOGGER.debug("Swing mode set successfully for %s to %s", self._uid, swing_mode)
+                await self._request_refresh_debounced()
+            else:
+                _LOGGER.error("Failed to set swing mode for %s", self._uid)
+        else:
+            _LOGGER.debug("Device %s is off, swing mode %s saved for next start", self._uid, swing_mode)
             self.async_write_ha_state()
     
     async def async_turn_on(self):
@@ -406,7 +474,8 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
             onoff=1,
             mode=mode_code,
             fan=fan_code,
-            temp=int(current_temp)
+            temp=int(current_temp),
+            louver=self._get_effective_louver_code(),
         )
         
         if success:
@@ -418,6 +487,8 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
                 fan_code=fan_code,
                 fan=FAN_MAP.get(fan_code, "auto"),
                 set_temp=int(current_temp),
+                louver_code=self._get_effective_louver_code(),
+                louver=LOUVER_MAP.get(self._get_effective_louver_code(), "auto"),
             )
             await self._request_refresh_debounced()
     
@@ -431,6 +502,7 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
             mode=self._get_effective_mode_code(),
             fan=self._get_effective_fan_code(),
             temp=self._get_effective_temperature(),
+            louver=self._get_effective_louver_code(),
         )
         
         if success:
