@@ -18,7 +18,6 @@ from .const import (
 from .power_meter import fetch_power_data
 
 _LOGGER = logging.getLogger(__name__)
-# Для обратной совместимости поддерживаем и cover, и select.
 PLATFORMS = ["climate", "sensor", "cover", "select"]
 
 class HisenseClient:
