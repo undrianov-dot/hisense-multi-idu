@@ -72,15 +72,14 @@ class HisenseDamperCover(CoordinatorEntity, CoverEntity):
             # Извлекаем положение жалюзи из данных
             damper_code = unit_data.get("damper_vertical", 0)
             # Преобразуем код в положение (0-100%)
-            if damper_code == 1:  # Закрыто
+            if damper_code == 0:  # angle_1 (самый закрытый)
                 self._current_position = 0
-            elif damper_code == 2:  # Открыто
+            elif damper_code == 2:  # angle_2
+                self._current_position = 50
+            elif damper_code == 4:  # angle_3 (самый открытый)
                 self._current_position = 100
-            elif damper_code == 6:  # Качание
+            elif damper_code == 1:  # auto (качание)
                 self._current_position = 50  # Среднее положение
-            elif 3 <= damper_code <= 5:  # Позиции 1-3
-                # Преобразуем в проценты: 3=25%, 4=50%, 5=75%
-                self._current_position = (damper_code - 2) * 25
     
     @property
     def available(self):
@@ -119,12 +118,12 @@ class HisenseDamperCover(CoordinatorEntity, CoverEntity):
     
     async def async_stop_cover(self, **kwargs):
         """Остановить движение жалюзи."""
-        # Для Hisense обычно используется код 6 для качания (свинга)
+        # Для Hidom используется код 1 для auto/качания
         # Отправляем команду качания, которая также может служить остановкой
         success = await self._client.set_damper(
             sys=self._sys,
             addr=self._addr,
-            command=6  # Код качания
+            command=1  # Код auto/качания
         )
         
         if success:
@@ -171,17 +170,13 @@ class HisenseDamperCover(CoordinatorEntity, CoverEntity):
     def _position_to_code(self, position):
         """Конвертирует процент положения в код устройства."""
         if position == 0:
-            return 1  # Закрыто
+            return 0  # angle_1
+        elif position < 100:
+            return 2  # angle_2
         elif position == 100:
-            return 2  # Открыто
-        elif position <= 25:
-            return 3  # Позиция 1
-        elif position <= 50:
-            return 4  # Позиция 2
-        elif position <= 75:
-            return 5  # Позиция 3
+            return 4  # angle_3
         else:
-            return 6  # Качание
+            return 1  # auto/качание
 
     @property
     def extra_state_attributes(self):

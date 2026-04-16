@@ -282,39 +282,6 @@ class HisenseClient:
             damper=command,
         )
 
-    async def set_damper_hidom(self, sys: int, addr: int, command: int) -> bool:
-        """Устанавливает положение вертикальных жалюзи по формату Hidom."""
-        if command not in {0, 1, 2, 4}:
-            _LOGGER.error("Unsupported damper command for S%s_%s: %s", sys, addr, command)
-            return False
-
-        idu_key = f"S{sys}_{addr}"
-        cached = self._last_idu_data.get(idu_key, {})
-        onoff = cached.get("power", 1)
-        mode = cached.get("mode_code", 8)
-        fan = cached.get("fan_code", 4)
-        temp = cached.get("set_temp", 24)
-
-        cmd_list = [
-            {"seq": 1, "sys": sys, "iduAddr": addr, "regAddr": 78, "regVal": [onoff, mode, fan, temp, 65535, command, 65535, 0, 65535, 0]},
-            {"seq": 2, "sys": sys, "iduAddr": addr, "regAddr": 72, "regVal": [2, 0, 0, 0, 0, 0]},
-        ]
-
-        url = f"http://{self._host}/cgi/set_idu.shtml"
-        try:
-            async with self._session.post(url, json={"ip": self._host, "cmdList": cmd_list}, timeout=10) as resp:
-                if resp.status != 200:
-                    _LOGGER.error("HTTP error when setting damper: %s", resp.status)
-                    return False
-                data = await resp.json(content_type=None)
-                success = data.get("status") == "success"
-                if not success:
-                    _LOGGER.error("Device returned error when setting damper: %s", data)
-                return success
-        except Exception as err:
-            _LOGGER.error("Failed to set damper: %s", err)
-            return False
-
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Hisense Multi-IDU from a config entry."""
     hass.data.setdefault(DOMAIN, {})
@@ -392,7 +359,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     # Настраиваем платформы
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    await hass.config_entries.async_forward_entry_setups(entry, ["select"])
     
     # Настраиваем слушатель для обновлений опций
     entry.async_on_unload(
@@ -407,7 +373,7 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, [*PLATFORMS, "select"])
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id, None)
     return unload_ok
