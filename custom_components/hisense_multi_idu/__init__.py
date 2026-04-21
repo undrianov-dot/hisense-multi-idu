@@ -286,6 +286,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
     
     host = entry.data["host"]
+    hub_name = entry.data.get("hub_name", "Hi Dom III")
     session = aiohttp_client.async_get_clientsession(hass)
     client = HisenseClient(host, session)
     
@@ -353,7 +354,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "client": client,
         "coordinator_climate": coordinator_climate,
         "coordinator_sensor": coordinator_sensor,
-        "host": host
+        "host": host,
+        "hub_name": hub_name,
     }
     
     # Настраиваем платформы
