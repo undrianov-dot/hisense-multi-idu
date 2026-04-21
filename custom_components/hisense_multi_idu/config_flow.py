@@ -10,6 +10,7 @@ from homeassistant.helpers import aiohttp_client
 
 from .const import DOMAIN
 
+
 class HisenseMultiIDUConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Hisense Multi-IDU."""
     VERSION = 1
@@ -19,6 +20,7 @@ class HisenseMultiIDUConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors = {}
         if user_input is not None:
             host = user_input.get("host", "").strip()
+            hub_name = user_input.get("hub_name", "").strip() or "Hi Dom III"
             # Проверяем, не сконфигурировано ли уже это устройство
             await self.async_set_unique_id(host)
             self._abort_if_unique_id_configured()
@@ -26,12 +28,16 @@ class HisenseMultiIDUConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             # Пробуем подключиться к устройству
             try:
                 session = aiohttp_client.async_get_clientsession(self.hass)
-                # Проверяем доступность основного интерфейса
-                async with session.get(f"http://{host}/", timeout=5) as resp:
+                async with session.post(
+                    f"http://{host}/cgi/get_miscdata.shtml",
+                    json={"ip": "127.0.0.1"},
+                    timeout=7,
+                ) as resp:
                     if resp.status != 200:
-                        # Пробуем другой endpoint
-                        async with session.get(f"http://{host}/cgi/get_miscdata.shtml", timeout=5):
-                            pass
+                        raise aiohttp.ClientError(f"Bad status code: {resp.status}")
+                    payload = await resp.json(content_type=None)
+                    if payload.get("status") != "success":
+                        raise aiohttp.ClientError("Invalid API response status")
             except (asyncio.TimeoutError, aiohttp.ClientError):
                 errors["base"] = "cannot_connect"
             except Exception:
@@ -41,7 +47,7 @@ class HisenseMultiIDUConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 # Всё в порядке, создаём запись
                 return self.async_create_entry(
                     title=f"Hisense Multi-IDU ({host})",
-                    data={"host": host}
+                    data={"host": host, "hub_name": hub_name}
                 )
         
         # Показываем форму ввода

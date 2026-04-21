@@ -516,11 +516,12 @@ async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = data["coordinator_climate"]
     client = data["client"]
     host = data["host"]
+    hub_name = data.get("hub_name", "Hi Dom III")
     
     entities = []
     
     # ФИКСИРОВАННОЕ ИМЯ УСТРОЙСТВА (Device) - это изменит название устройства в HA
-    hub_device_name = f"Hisense Multi-IDU Hub ({host})"
+    hub_device_name = hub_name
     
     # Базовая информация об устройстве (Device)
     base_device_info = {

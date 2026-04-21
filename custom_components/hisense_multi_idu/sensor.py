@@ -16,7 +16,7 @@ _LOGGER = logging.getLogger(__name__)
 class HisenseRawMeter(CoordinatorEntity, SensorEntity):
     """Raw sensor from Hisense (like in YAML)."""
     
-    def __init__(self, coordinator, ip: str):
+    def __init__(self, coordinator, ip: str, hub_name: str):
         """Initialize the raw sensor entity."""
         super().__init__(coordinator)
         self._ip = ip
@@ -28,7 +28,7 @@ class HisenseRawMeter(CoordinatorEntity, SensorEntity):
         # Device info to link with hub device
         self._attr_device_info = {
             "identifiers": {(DOMAIN, ip)},
-            "name": f"Hisense Multi-IDU Hub ({ip})",
+            "name": hub_name,
             "manufacturer": "Hisense",
             "model": "Multi-IDU Hub",
             "configuration_url": f"http://{ip}"
@@ -73,7 +73,7 @@ class HisenseEnergyMeter(CoordinatorEntity, SensorEntity):
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
     _attr_suggested_display_precision = 2
     
-    def __init__(self, coordinator, ip: str):
+    def __init__(self, coordinator, ip: str, hub_name: str):
         """Initialize the energy meter entity."""
         super().__init__(coordinator)
         self._ip = ip
@@ -84,7 +84,7 @@ class HisenseEnergyMeter(CoordinatorEntity, SensorEntity):
         # Device info to link with hub device
         self._attr_device_info = {
             "identifiers": {(DOMAIN, ip)},
-            "name": f"Hisense Multi-IDU Hub ({ip})",
+            "name": hub_name,
             "manufacturer": "Hisense",
             "model": "Multi-IDU Hub",
             "configuration_url": f"http://{ip}"
@@ -140,7 +140,7 @@ class HisensePowerSensor(CoordinatorEntity, SensorEntity):
     _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
     _attr_suggested_display_precision = 3
     
-    def __init__(self, coordinator, ip: str):
+    def __init__(self, coordinator, ip: str, hub_name: str):
         """Initialize the power sensor entity."""
         super().__init__(coordinator)
         self._ip = ip
@@ -151,7 +151,7 @@ class HisensePowerSensor(CoordinatorEntity, SensorEntity):
         # Device info to link with hub device
         self._attr_device_info = {
             "identifiers": {(DOMAIN, ip)},
-            "name": f"Hisense Multi-IDU Hub ({ip})",
+            "name": hub_name,
             "manufacturer": "Hisense",
             "model": "Multi-IDU Hub",
             "configuration_url": f"http://{ip}"
@@ -225,18 +225,19 @@ async def async_setup_entry(hass, entry, async_add_entities):
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator = data["coordinator_sensor"]
     ip = data["host"]
+    hub_name = data.get("hub_name", "Hi Dom III")
     
     _LOGGER.info("Setting up energy and power sensors for IP: %s", ip)
     
     entities = []
     
     # 1. Сырой сенсор (как в YAML)
-    entities.append(HisenseRawMeter(coordinator, ip))
+    entities.append(HisenseRawMeter(coordinator, ip, hub_name))
     
     # 2. Счетчик энергии в кВт·ч (основной)
-    entities.append(HisenseEnergyMeter(coordinator, ip))
+    entities.append(HisenseEnergyMeter(coordinator, ip, hub_name))
     
     # 3. Расчетный датчик текущей мощности (опционально)
-    entities.append(HisensePowerSensor(coordinator, ip))
+    entities.append(HisensePowerSensor(coordinator, ip, hub_name))
     
     async_add_entities(entities, update_before_add=False)
