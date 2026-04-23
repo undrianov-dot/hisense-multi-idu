@@ -136,7 +136,7 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
     def _get_effective_louver_code(self):
         """Return the louver code that should be preserved across commands."""
         return self._current_data.get("louver_code", self._saved_settings.get("louver", 1))
-    
+
     def _update_data(self):
         """Обновляет данные из координатора."""
         data = self.coordinator.data
