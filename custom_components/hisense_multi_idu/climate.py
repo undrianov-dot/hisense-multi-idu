@@ -87,6 +87,11 @@ class HisenseIDUClimate(CoordinatorEntity, ClimateEntity):
         else:
             self._sys = 1
             self._addr = 1
+
+        # Для блоков системы 1 (адреса 1-8) поддерживается расширенный
+        # диапазон уставки температуры с нижней границей 8°C.
+        if self._sys == 1 and 1 <= self._addr <= 8:
+            self._attr_min_temp = 8
         
         # Если передано имя объекта, используем его, иначе берем из device_info
         if entity_name:
