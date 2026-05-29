@@ -180,12 +180,20 @@ class HisensePowerSensor(CoordinatorEntity, SensorEntity):
                     energy_diff_wh = current_energy - self._last_energy
                     time_diff_hours = (current_time - self._last_update_time) / 3600.0
 
-                    if time_diff_hours > 0:
+                    # Игнорируем отрицательную дельту (сброс/переполнение счетчика)
+                    # и не допускаем отрицательную текущую мощность.
+                    if time_diff_hours > 0 and energy_diff_wh >= 0:
                         power_kw = (energy_diff_wh / time_diff_hours) / 1000.0
                         if self._current_power == 0:
                             self._current_power = power_kw
                         else:
                             self._current_power = 0.7 * self._current_power + 0.3 * power_kw
+                    elif energy_diff_wh < 0:
+                        _LOGGER.debug(
+                            "Skipping power update due to negative energy delta: prev=%s, current=%s",
+                            self._last_energy,
+                            current_energy,
+                        )
 
                 self._last_energy = current_energy
                 self._last_update_time = current_time
